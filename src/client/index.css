@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-text;
+  }
+}
+
+@layer components {
+  .receipt-paper {
+    background-color: #fff;
+    background-image: 
+      linear-gradient(#eee .1em, transparent .1em);
+    background-size: 100% 1.2em;
+    font-family: 'Courier New', Courier, monospace;
+    box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    color: #1a1a1a;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-slate-900 font-bold py-2 px-4 rounded hover:bg-primaryHover transition-colors;
+  }
+
+  .card {
+    @apply bg-surface rounded-lg p-4 shadow-sm;
+  }
+  
+  .input-field {
+    @apply w-full bg-secondary border border-gray-700 rounded p-2 text-white focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0f212e; 
+}
+::-webkit-scrollbar-thumb {
+  background: #2a4453; 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #365669; 
+}
