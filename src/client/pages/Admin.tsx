@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../utils/api'
-import { LayoutDashboard, Wallet, Users, Settings, LogOut, RefreshCw, ExternalLink, Copy, Bell, Send, CheckCircle, XCircle, PlusCircle, MinusCircle, Mail, Eye, Trash2, Lock, Unlock, Upload, Gamepad2 } from 'lucide-react'
+import { LayoutDashboard, Wallet, Users, Settings, LogOut, RefreshCw, ExternalLink, Copy, Bell, Send, CheckCircle, XCircle, PlusCircle, MinusCircle, Mail, Eye, Trash2, Lock, Unlock, Upload, Gamepad2, BarChart3 } from 'lucide-react'
 import { Dialog } from '@headlessui/react'
 import { toast } from 'sonner'
 import ConfirmModal from '../components/ConfirmModal'
@@ -10,12 +10,13 @@ export default function Admin() {
   const [auth, setAuth] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [tab, setTab] = useState('matches') 
+  const [tab, setTab] = useState('overview') 
   
   const [orders, setOrders] = useState<any[]>([])
   const [txs, setTxs] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [config, setConfig] = useState<any>({})
+  const [stats, setStats] = useState<{total: number, daily: any[]}>({total: 0, daily: []})
   const [loading, setLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -79,6 +80,10 @@ export default function Admin() {
   const loadData = async () => {
     setLoading(true)
     try {
+      if (tab === 'overview') {
+          const res = await api.get('/admin/stats/visits')
+          setStats(res.data)
+      }
       if (tab === 'orders') {
         const res = await api.get('/admin/orders')
         setOrders(res.data)
@@ -326,6 +331,7 @@ export default function Admin() {
       <aside className="w-64 bg-[#1a2c38] border-r border-gray-800 flex flex-col fixed h-full z-10">
           <div className="p-6 border-b border-gray-800"><h1 className="text-xl font-black italic">Stake <span className="text-[#00E701]">Parceiros</span></h1></div>
           <nav className="flex-1 p-4 space-y-2">
+              <SidebarItem id="overview" icon={BarChart3} label="数据概览" />
               <SidebarItem id="matches" icon={Gamepad2} label="赛事管理" />
               <SidebarItem id="orders" icon={LayoutDashboard} label="注单管理" />
               <SidebarItem id="finance" icon={Wallet} label="财务审核" />
@@ -339,6 +345,44 @@ export default function Admin() {
       </aside>
 
       <main className="ml-64 flex-1 p-8 overflow-y-auto">
+          {tab === 'overview' && (
+              <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="bg-[#1a2c38] p-6 rounded-xl border border-gray-800 shadow-lg">
+                          <div className="flex items-center gap-4 mb-2">
+                              <div className="p-3 bg-blue-500/20 text-blue-500 rounded-lg"><BarChart3 size={24}/></div>
+                              <h3 className="text-gray-400 font-bold">总访问量</h3>
+                          </div>
+                          <div className="text-3xl font-black text-white">{stats.total.toLocaleString()}</div>
+                          <div className="text-xs text-gray-500 mt-2">历史累计访问次数</div>
+                      </div>
+                  </div>
+
+                  <div className="bg-[#1a2c38] rounded-xl border border-gray-800 overflow-hidden">
+                      <div className="p-6 border-b border-gray-800"><h3 className="font-bold text-lg">每日访问趋势 (最近30天)</h3></div>
+                      <div className="p-6">
+                          {stats.daily.length > 0 ? (
+                              <div className="space-y-3">
+                                  {stats.daily.map((day: any) => (
+                                      <div key={day.date} className="flex items-center gap-4">
+                                          <div className="w-24 text-sm text-gray-400 font-mono">{day.date}</div>
+                                          <div className="flex-1 h-8 bg-black/30 rounded-full overflow-hidden relative">
+                                              <div 
+                                                  className="h-full bg-blue-500/50 flex items-center px-3 text-xs font-bold text-white transition-all duration-500" 
+                                                  style={{width: `${Math.max(5, (day.count / Math.max(...stats.daily.map((d:any)=>d.count))) * 100)}%`}}
+                                              >
+                                                  {day.count}
+                                              </div>
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+                          ) : <div className="text-gray-500 text-center py-8">暂无数据</div>}
+                      </div>
+                  </div>
+              </div>
+          )}
+
           {tab === 'matches' && <ManualMatchManager />}
           
           {tab === 'orders' && (
@@ -374,6 +418,72 @@ export default function Admin() {
 
           {tab === 'finance' && (
               <div className="bg-[#1a2c38] rounded-xl border border-gray-800 overflow-hidden">
+                  {/* Exchange Rate Setting Card */}
+                  <div className="p-6 border-b border-gray-800 bg-[#15222b]">
+                      <h3 className="text-sm font-bold text-gray-400 mb-3 uppercase">汇率设置 (USDT/BRL)</h3>
+                      <div className="flex items-end gap-4">
+                          <div className="flex-1 max-w-xs">
+                              <label className="text-xs text-gray-500 block mb-1">当前汇率 (1 USDT = ? BRL)</label>
+                              <div className="relative">
+                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">R$</span>
+                                  <input 
+                                      type="number" 
+                                      step="0.01" 
+                                      defaultValue={config.usdt_brl_rate || 5.85} 
+                                      key={config.usdt_brl_rate} // Force re-render on update
+                                      id="exchange_rate_input"
+                                      className="w-full bg-[#0f212e] border border-gray-700 rounded-lg py-2 pl-8 pr-4 text-white font-mono text-lg font-bold focus:border-[#00E701] outline-none"
+                                  />
+                              </div>
+                          </div>
+                          <button 
+                              onClick={async () => {
+                                  const val = (document.getElementById('exchange_rate_input') as HTMLInputElement).value
+                                  try {
+                                      await api.post('/admin/config/rate', { rate: val })
+                                      toast.success('汇率更新成功')
+                                      loadData()
+                                  } catch(e) { toast.error('更新失败') }
+                              }}
+                              className="bg-[#00E701] text-black px-6 py-2.5 rounded-lg font-bold hover:bg-[#00c001] transition"
+                          >
+                              更新汇率
+                          </button>
+                          
+                          <button 
+                              onClick={async () => {
+                                  const btn = document.getElementById('btn_sync_rate') as HTMLButtonElement
+                                  if(btn) btn.disabled = true;
+                                  const toastId = toast.loading('正在同步实时汇率...')
+                                  try {
+                                      const res = await api.post('/admin/config/rate/sync')
+                                      toast.dismiss(toastId)
+                                      toast.success(`同步成功: R$ ${res.data.rate}`)
+                                      // Update input
+                                      const input = document.getElementById('exchange_rate_input') as HTMLInputElement
+                                      if(input) input.value = res.data.rate;
+                                      
+                                      // Trigger reload
+                                      loadData()
+                                  } catch(e) { 
+                                      toast.dismiss(toastId)
+                                      toast.error('同步失败: API不可用') 
+                                  } finally {
+                                      if(btn) btn.disabled = false;
+                                  }
+                              }}
+                              id="btn_sync_rate"
+                              className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-500 transition flex items-center gap-2 disabled:opacity-50"
+                          >
+                              <RefreshCw size={18} /> 同步实时
+                          </button>
+                          
+                          <div className="text-xs text-gray-500 pb-2">
+                              * 此汇率实时影响所有充值和提现计算。
+                          </div>
+                      </div>
+                  </div>
+
                   <div className="p-4 border-b border-gray-800">
                       <input 
                           type="text" 
@@ -610,6 +720,33 @@ export default function Admin() {
                                           <div className="text-lg font-bold text-purple-300">R$ {Number(userProfile.data.stats?.total_bets || 0).toFixed(2)}</div>
                                       </div>
                                   </div>
+                              </div>
+
+                              <div className="border-t border-gray-700 pt-4">
+                                  <h4 className="font-bold mb-3 text-gray-300">团队关系</h4>
+                                  <div className="grid grid-cols-2 gap-4">
+                                      <div className="bg-black/20 p-4 rounded-lg">
+                                          <div className="text-xs text-gray-400 mb-1">上级用户 (Upline)</div>
+                                          {userProfile.data.upline_uid ? (
+                                              <div className="font-mono text-[#00E701] font-bold">{userProfile.data.upline_uid}</div>
+                                          ) : <div className="text-gray-500 italic">无上级</div>}
+                                      </div>
+                                      <div className="bg-black/20 p-4 rounded-lg">
+                                          <div className="text-xs text-gray-400 mb-1">下级团队 (Direct Downline)</div>
+                                          <div className="font-bold text-xl">{userProfile.data.downline_uids?.length || 0} <span className="text-sm text-gray-500 font-normal">人</span></div>
+                                      </div>
+                                  </div>
+                                  
+                                  {userProfile.data.downline_uids && userProfile.data.downline_uids.length > 0 && (
+                                      <div className="mt-3 bg-black/20 p-3 rounded-lg max-h-32 overflow-y-auto">
+                                          <div className="text-xs text-gray-500 mb-2">下级 UID 列表:</div>
+                                          <div className="flex flex-wrap gap-2">
+                                              {userProfile.data.downline_uids.map((uid: string) => (
+                                                  <span key={uid} className="bg-gray-700 px-2 py-1 rounded text-xs font-mono">{uid}</span>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
                               </div>
 
                               {userProfile.data.real_name && (

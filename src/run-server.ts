@@ -13,8 +13,10 @@ import wallet from './api/wallet'
 import team from './api/team'
 import sports from './api/sports'
 import admin, { publicConfig } from './api/admin'
+import vqpay from './api/vqpay'
 import { autoSettleBets } from './api/settlement'
 import { updateSportsData } from './api/sports'
+import { visitMiddleware } from './visitMiddleware'
 
 const port = parseInt(process.env.PORT || '3000')
 const app = new Hono()
@@ -44,7 +46,7 @@ setInterval(() => {
                  // Let's fix this block to properly wrap the DB for the helper function.
             }
         },
-        ODDS_API_KEY: "504f3a87-d3e5-4d65-accd-71855e16a69d"
+        ODDS_API_KEY: process.env.ODDS_API_KEY || "244533-KG7TshXWJYPVVd"
     } as any
     
     // We need a robust DB wrapper for the standalone function
@@ -149,14 +151,29 @@ app.use('*', async (c, next) => {
              }
         }
     },
-    ODDS_API_KEY: "504f3a87-d3e5-4d65-accd-71855e16a69d",
-    JWT_SECRET: "dev-secret-key-stable"
+    ODDS_API_KEY: process.env.ODDS_API_KEY || "244533-KG7TshXWJYPVVd",
+    JWT_SECRET: "dev-secret-key-stable",
+    VQPAY_APP_ID: "sp2017234877044363264m",
+    VQPAY_SECRET_PAY: "OBA7XU8JR8CX3CSYV1OBUWGAUE0TE8CS",
+    VQPAY_SECRET_SETTLE: "PHNPMM4HYBSFYBTB9EFOSDVBS1EE9GNS",
+    VQPAY_API_URL: "https://api.vortaqpay.com"
   }
   await next()
 })
 
 // --- Middleware ---
+app.use('*', visitMiddleware)
 app.use('/*', cors())
+
+app.use(async (c, next) => {
+    console.log(`[${c.req.method}] ${c.req.url}`)
+    try {
+        await next()
+    } catch (e) {
+        console.error('Global Error Handler:', e)
+        return c.json({ error: 'Internal Server Error' }, 500)
+    }
+})
 
 // --- Routes ---
 app.route('/api/public-config', publicConfig)
@@ -166,6 +183,7 @@ app.route('/api/wallet', wallet)
 app.route('/api/team', team)
 app.route('/api/sports', sports)
 app.route('/api/admin', admin)
+app.route('/api/vqpay', vqpay)
 
 // File Upload Shim (Memory/Disk)
 app.post('/api/upload', async (c) => {

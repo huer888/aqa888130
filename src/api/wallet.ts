@@ -7,16 +7,26 @@ const wallet = new Hono<{ Bindings: Bindings, Variables: { user: any } }>()
 wallet.use('*', authMiddleware)
 
 // --- Helper: Exchange Rate ---
-const USDT_BRL_RATE = 5.85 // Default Mock Rate
-const TRC20_ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkce85kym" // Platform Address
-
 async function getRate(db: D1Database): Promise<number> {
-    const res = await db.prepare("SELECT rate FROM exchange_rates WHERE pair = 'USDT_BRL'").first<any>()
-    if (res) return res.rate
+    try {
+        const res = await db.prepare("SELECT rate FROM exchange_rates WHERE pair = 'USDT_BRL'").first<any>()
+        if (res && res.rate) return res.rate
+    } catch (e) {
+        console.error('Error fetching rate, using default')
+    }
+    
+    // Default Mock Rate - Fallback if DB fetch fails or row missing
+    const USDT_BRL_RATE = 5.85 
+    
     // Initialize if not exists
-    await db.prepare("INSERT OR IGNORE INTO exchange_rates (pair, rate, updated_at) VALUES ('USDT_BRL', ?, ?)").bind(USDT_BRL_RATE, Date.now()).run()
+    try {
+        await db.prepare("INSERT OR IGNORE INTO exchange_rates (pair, rate, updated_at) VALUES ('USDT_BRL', ?, ?)").bind(USDT_BRL_RATE, Date.now()).run()
+    } catch(e) {}
+    
     return USDT_BRL_RATE
 }
+
+const TRC20_ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkce85kym" // Platform Address
 
 // Get Wallet Info (Balance + User Setup + Rate)
 wallet.get('/info', async (c) => {
@@ -46,12 +56,41 @@ wallet.get('/info', async (c) => {
 // Update User Payment Settings
 wallet.post('/setup', async (c) => {
     const userId = c.get('user').id
-    const { pin, address } = await c.req.json()
+    const { pin } = await c.req.json()
     
     if (!pin || pin.length < 6) return c.json({ error: 'PIN must be 6 digits' }, 400)
     
-    await c.env.DB.prepare('UPDATE users SET payment_pin = ?, usdt_address = ? WHERE id = ?').bind(pin, address || null, userId).run()
+    // Only update PIN, address is handled separately now
+    await c.env.DB.prepare('UPDATE users SET payment_pin = ? WHERE id = ?').bind(pin, userId).run()
     return c.json({ success: true })
+})
+
+// Save Withdrawal Method
+wallet.post('/methods', async (c) => {
+    const userId = c.get('user').id
+    const { type, value, label } = await c.req.json() // type: 'usdt' | 'pix'
+    
+    if (type === 'usdt') {
+        await c.env.DB.prepare('UPDATE users SET usdt_address = ? WHERE id = ?').bind(value, userId).run()
+    } else if (type === 'pix') {
+        // Value should be JSON string: { key: '...', keyType: 'CPF' }
+        // For simplicity, we just store the whole object in pix_info
+        const info = JSON.stringify({ key: value, keyType: label }) 
+        await c.env.DB.prepare('UPDATE users SET pix_info = ? WHERE id = ?').bind(info, userId).run()
+    }
+    
+    return c.json({ success: true })
+})
+
+// Get Withdrawal Methods
+wallet.get('/methods', async (c) => {
+    const userId = c.get('user').id
+    const user = await c.env.DB.prepare('SELECT usdt_address, pix_info FROM users WHERE id = ?').bind(userId).first<any>()
+    
+    return c.json({
+        usdt: user.usdt_address,
+        pix: user.pix_info ? JSON.parse(user.pix_info) : null
+    })
 })
 
 // Get Transactions

@@ -26,10 +26,8 @@ export default function SecurityCenter({ isOpen, onClose, initialTab = 'password
   
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-      if(initialTab) setActiveTab(initialTab)
-  }, [initialTab])
-
+  // Methods removed per request
+  
   const handlePasswordChange = async (e: React.FormEvent) => {
       e.preventDefault()
       if (newPassword !== confirmPassword) return toast.error('As senhas não coincidem')

@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../utils/api'
 import Logo from '../components/Logo'
 import { toast } from 'sonner'
+import { ArrowLeft } from 'lucide-react'
 
 export default function Register() {
   const [searchParams] = useSearchParams()
@@ -12,7 +13,6 @@ export default function Register() {
   const [password, setPassword] = useState('')
   const [inviteCode, setInviteCode] = useState('')
   const [rate, setRate] = useState('')
-  const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
 
@@ -33,42 +33,28 @@ export default function Register() {
     if (!email) return setError('Por favor, insira o e-mail')
     if (!password || password.length < 6) return setError('A senha deve ter no mínimo 6 caracteres')
     if (!inviteCode) return setError('O código de convite é obrigatório')
-    if (!code) return setError('Código de verificação inválido')
 
     try {
-      await api.post('/auth/register', { 
+      const res = await api.post('/auth/register', { 
         email, 
         name,
         password, 
-        code,
         inviteCode,
         rate
       })
-      toast.success('Cadastro realizado com sucesso! Faça login.')
-      navigate('/login')
+      
+      if (res.data.token) {
+          localStorage.setItem('token', res.data.token)
+          toast.success('Cadastro realizado! Você já está logado.')
+          window.location.href = '/'
+      } else {
+          toast.success('Cadastro realizado com sucesso! Faça login.')
+          navigate('/login')
+      }
     } catch (err: any) {
       const msg = err.response?.data?.error || 'Erro ao registrar'
       setError(msg)
     }
-  }
-
-  const [sending, setSending] = useState(false)
-
-  // ...
-
-  const sendCode = async () => {
-      if(!email) return toast.error('Por favor, insira o e-mail')
-      
-      setSending(true)
-      try {
-          // Real Email API Call
-          await api.post('/auth/send-code', { email, type: 'register' })
-          toast.success('Código enviado para seu e-mail')
-      } catch (e: any) {
-          toast.error('Erro ao enviar código')
-      } finally {
-          setSending(false)
-      }
   }
 
   return (
@@ -76,6 +62,10 @@ export default function Register() {
       {/* Background decoration */}
       <div className="absolute -top-20 -right-20 w-64 h-64 bg-primary/5 rounded-full blur-3xl"></div>
       <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl"></div>
+
+      <button onClick={() => navigate('/')} className="absolute top-6 left-6 text-textMuted hover:text-white flex items-center gap-2 z-20">
+          <ArrowLeft size={20} /> Voltar
+      </button>
 
       <div className="w-full max-w-sm relative z-10">
         <div className="flex flex-col items-center mb-6">
@@ -137,22 +127,6 @@ export default function Register() {
                     Oferta Especial: {Number(rate) * 100}% de Comissão
                 </div>
             )}
-            <div>
-              <label className="block text-xs font-bold text-textMuted uppercase mb-1.5">Código de Verificação</label>
-              <div className="flex gap-2">
-                  <input 
-                  type="text" 
-                  value={code}
-                  onChange={e => setCode(e.target.value)}
-                  className="input-field"
-                  placeholder="Código do e-mail"
-                  required 
-                  />
-                  <button type="button" disabled={sending} className="bg-secondary hover:bg-surfaceHover border border-gray-700 text-white px-4 rounded text-xs font-bold transition-colors disabled:opacity-50" onClick={sendCode}>
-                      {sending ? '...' : 'ENVIAR'}
-                  </button>
-              </div>
-            </div>
             
             <button type="submit" className="w-full btn-primary py-3 text-sm uppercase tracking-wide shadow-lg shadow-primary/10 mt-2">
               CRIAR CONTA

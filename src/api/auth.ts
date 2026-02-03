@@ -14,24 +14,7 @@ async function getConfig(db: D1Database, key: string) {
 
 // Register
 auth.post('/register', async (c) => {
-  const { email, password, name, code, inviteCode, rate } = await c.req.json()
-
-  // Verify Code
-  let isValid = false
-  if (code === '889988') {
-      isValid = true
-  } else {
-      const stored = await c.env.DB.prepare('SELECT code, expires_at FROM verification_codes WHERE email = ?').bind(email).first<any>()
-      if (stored && stored.code === code && stored.expires_at > Date.now()) {
-          isValid = true
-          // Consume code
-          await c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run()
-      }
-  }
-
-  if (!isValid) {
-      return c.json({ error: 'Código de verificação inválido ou expirado' }, 400)
-  }
+  const { email, password, name, inviteCode, rate } = await c.req.json()
 
   // Force Invite Code Check
   if (!inviteCode) {
@@ -48,23 +31,27 @@ auth.post('/register', async (c) => {
   let parentId = null
   let commissionRate = 0.05 
   
-  const parent = await c.env.DB.prepare('SELECT id, commission_rate FROM users WHERE invite_code = ? OR id = ?').bind(inviteCode, inviteCode).first<any>()
+  const parent = await c.env.DB.prepare('SELECT id, commission_rate, invite_code FROM users WHERE invite_code = ? OR id = ?').bind(inviteCode, inviteCode).first<any>()
   if (!parent) {
       return c.json({ error: 'Código de convite inválido' }, 400)
   }
   
   parentId = parent.id
   
+  // Special Rule: If parent is Master Account (888888), max rate is 5%
+  const maxRate = parent.invite_code === '888888' ? 0.05 : parent.commission_rate
+
   if (rate) {
         const requestedRate = parseFloat(rate)
-        if (requestedRate <= parent.commission_rate && requestedRate > 0) {
+        if (requestedRate <= maxRate && requestedRate > 0) {
             commissionRate = requestedRate
         } else {
-            commissionRate = parent.commission_rate - 0.01 
-            if(commissionRate < 0.01) commissionRate = 0.01
+            // If requested is too high, give max possible or calculate standard step down
+            commissionRate = maxRate
         }
   } else {
-        commissionRate = 0.05
+        // Default assignment
+        commissionRate = parent.invite_code === '888888' ? 0.05 : 0.05
   }
 
   // Hash Password
@@ -92,7 +79,33 @@ auth.post('/register', async (c) => {
         await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(uid, 'Bem-vindo ao Stake.BR', 'Comece a apostar agora e ganhe comissões!').run()
     }
 
-    return c.json({ success: true, message: 'Registrado com sucesso' })
+    // *** Auto Login: Generate Token ***
+    const token = await sign({
+      id: result.meta.last_row_id, // Use the new ID
+      uid: uid,
+      invite_code: newInviteCode,
+      email: email,
+      name: name || email.split('@')[0],
+      role: 'agent', // Default role
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365 * 10 // 10 Years expiration (Never expire practically)
+    }, c.env.JWT_SECRET, 'HS256')
+
+    return c.json({ 
+        success: true, 
+        message: 'Registrado com sucesso',
+        token,
+        user: {
+            id: result.meta.last_row_id,
+            uid,
+            invite_code: newInviteCode,
+            email,
+            name: name || email.split('@')[0],
+            role: 'agent',
+            balance: 0,
+            commission_balance: 0,
+            commission_rate: commissionRate
+        }
+    })
   } catch (e) {
     console.error(e)
     return c.json({ error: 'Erro ao criar conta' }, 500)

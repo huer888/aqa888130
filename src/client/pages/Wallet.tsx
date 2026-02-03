@@ -1,28 +1,37 @@
-import { useState, useEffect } from 'react'
-import api from '../utils/api'
-import { Wallet as WalletIcon, ArrowUpRight, ArrowDownLeft, Lock, RefreshCcw, Copy, CheckCircle2, Upload, AlertCircle, Settings } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import html2canvas from 'html2canvas'
+import { Wallet as WalletIcon, ArrowUpRight, ArrowDownLeft, Lock, RefreshCcw, Copy, CheckCircle2, Upload, AlertCircle, Settings, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { useUser } from '../context/UserContext'
+import api from '../utils/api'
+import { isValidCPF } from '../utils/validators'
 
 export default function Wallet() {
   const { user, refreshUser } = useUser()
   const [walletInfo, setWalletInfo] = useState<any>(null)
+  // Store rate in local state for immediate updates, though context also has it
+  const [currentRate, setCurrentRate] = useState(5.85) 
   const [loading, setLoading] = useState(true)
+  const [paymentMethod, setPaymentMethod] = useState<'usdt' | 'pix'>('pix')
+  const [pixType, setPixType] = useState('CPF')
+  const [pixKey, setPixKey] = useState('')
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw'>('deposit')
-  const [step, setStep] = useState<'input' | 'payment' | 'success'>('input') // deposit flow
+  const [step, setStep] = useState<'input' | 'payment' | 'success' | 'qrcode'>('input') // deposit flow
+  const [pixQrCode, setPixQrCode] = useState('')
+  const [pixCopyPaste, setPixCopyPaste] = useState('')
   
   // Forms
   const [amount, setAmount] = useState('')
   const [pin, setPin] = useState('')
   const [setupPin, setSetupPin] = useState('')
-  const [setupAddress, setSetupAddress] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
   const [withdrawAddress, setWithdrawAddress] = useState('') // New state for withdraw address
   const [proofFile, setProofFile] = useState<File | null>(null)
   const [proofPreview, setProofPreview] = useState('')
   const [processing, setProcessing] = useState(false)
 
   // Derived
-  const usdtRate = walletInfo?.rate || 1
+  const usdtRate = currentRate || walletInfo?.rate || 5.85
   const usdtAmount = amount ? (parseFloat(amount) / usdtRate).toFixed(2) : '0.00'
   const currentBalance = Number(user?.balance || 0)
 
@@ -40,6 +49,7 @@ export default function Wallet() {
       // Fetch Info
       api.get('/wallet/info').then(res => {
           setWalletInfo(res.data)
+          if(res.data.rate) setCurrentRate(res.data.rate)
       }).catch(console.error)
     } catch (e) {
       console.error(e)
@@ -48,10 +58,38 @@ export default function Wallet() {
     }
   }
 
-  const handleDepositInit = (e: React.FormEvent) => {
+  const handleDepositInit = async (e: React.FormEvent) => {
     e.preventDefault()
     if(!amount || parseFloat(amount) < 10) return toast.error('Mínimo R$ 10,00')
-    setStep('payment')
+    
+    if (paymentMethod === 'pix') {
+        setProcessing(true)
+        try {
+            const res = await api.post('/vqpay/pay', {
+                amount: parseFloat(amount),
+                payment_method_id: 'PIX'
+            })
+            if (res.data.success) {
+                if (res.data.qr_code) {
+                    setPixQrCode(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(res.data.qr_code)}`)
+                    setPixCopyPaste(res.data.qr_code)
+                    setStep('qrcode')
+                } else if (res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url
+                } else {
+                    toast.error('Erro: Resposta de pagamento inválida')
+                }
+            } else {
+                toast.error('Erro ao iniciar pagamento PIX')
+            }
+        } catch (e: any) {
+            toast.error(e.response?.data?.error || 'Erro ao processar PIX')
+        } finally {
+            setProcessing(false)
+        }
+    } else {
+        setStep('payment')
+    }
   }
 
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,6 +134,11 @@ export default function Wallet() {
 
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    const val = parseFloat(amount);
+    if (isNaN(val) || val < 10) return toast.error('Mínimo R$ 10,00');
+    if (val > currentBalance) return toast.error('Saldo insuficiente');
+
     setProcessing(true)
     try {
       // 1. Update Address first (using the PIN provided for withdrawal)
@@ -120,23 +163,42 @@ export default function Wallet() {
     }
   }
 
+  const downloadQrCode = async () => {
+      if (!pixQrCode) return
+      
+      try {
+        const response = await fetch(pixQrCode);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `pix-payment-${Date.now()}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error('Download failed:', error);
+        toast.error('Erro ao baixar QR Code. Tente salvar manualmente.');
+        window.open(pixQrCode, '_blank');
+      }
+  }
+
   const handleSetup = async (e: React.FormEvent) => {
       e.preventDefault()
+      if (setupPin !== confirmPin) return toast.error('Os PINs não coincidem')
+      
       setProcessing(true)
       try {
-          await api.post('/wallet/setup', { pin: setupPin, address: setupAddress })
-          toast.success('Configurações salvas!')
+          await api.post('/wallet/setup', { pin: setupPin })
+          toast.success('PIN configurado!')
           fetchData()
+          refreshUser()
       } catch (e: any) {
           toast.error(e.response?.data?.error || 'Erro ao salvar')
       } finally {
           setProcessing(false)
       }
-  }
-
-  const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text)
-      toast.success('Copiado!')
   }
 
   if (loading) return <div className="p-8 text-center text-textMuted">Carregando carteira...</div>
@@ -164,19 +226,20 @@ export default function Wallet() {
                               maxLength={6}
                               value={setupPin}
                               onChange={e => setSetupPin(e.target.value)}
-                              className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-white focus:border-primary outline-none"
+                              className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-white focus:border-primary outline-none tracking-widest text-center"
                               placeholder="******"
                               required
                           />
                       </div>
                       <div>
-                          <label className="block text-xs text-textMuted mb-1.5">Endereço USDT (TRC20) para Saques</label>
+                          <label className="block text-xs text-textMuted mb-1.5">Confirmar PIN</label>
                           <input 
-                              type="text" 
-                              value={setupAddress}
-                              onChange={e => setSetupAddress(e.target.value)}
-                              className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-white focus:border-primary outline-none font-mono text-xs"
-                              placeholder="T..."
+                              type="password" 
+                              maxLength={6}
+                              value={confirmPin}
+                              onChange={e => setConfirmPin(e.target.value)}
+                              className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-white focus:border-primary outline-none tracking-widest text-center"
+                              placeholder="******"
                               required
                           />
                       </div>
@@ -185,7 +248,7 @@ export default function Wallet() {
                           disabled={processing}
                           className="w-full bg-primary text-black font-bold py-3.5 rounded-lg hover:bg-primary/90 transition-colors"
                       >
-                          {processing ? 'Salvando...' : 'Salvar e Continuar'}
+                          {processing ? 'Salvando...' : 'Confirmar e Continuar'}
                       </button>
                   </form>
               </div>
@@ -254,6 +317,33 @@ export default function Wallet() {
             <div className="p-6">
                 {step === 'input' && (
                     <form onSubmit={handleDepositInit} className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        
+                        {/* Method Selector */}
+                        <div className="grid grid-cols-2 gap-2 mb-6">
+                            <button
+                                type="button"
+                                onClick={() => setPaymentMethod('pix')}
+                                className={`py-3 rounded-lg border flex flex-col items-center justify-center gap-1 transition ${
+                                    paymentMethod === 'pix' 
+                                    ? 'bg-green-500/10 border-green-500 text-green-500' 
+                                    : 'bg-black/20 border-white/5 text-textMuted hover:bg-white/5'
+                                }`}
+                            >
+                                <span className="font-bold">PIX</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPaymentMethod('usdt')}
+                                className={`py-3 rounded-lg border flex flex-col items-center justify-center gap-1 transition ${
+                                    paymentMethod === 'usdt' 
+                                    ? 'bg-primary/10 border-primary text-primary' 
+                                    : 'bg-black/20 border-white/5 text-textMuted hover:bg-white/5'
+                                }`}
+                            >
+                                <span className="font-bold">USDT</span>
+                            </button>
+                        </div>
+
                         <div className="text-center mb-6">
                             <h3 className="text-lg font-bold text-white">Quanto você quer depositar?</h3>
                             <p className="text-xs text-textMuted mt-1">Conversão automática para BRL ao entrar na plataforma</p>
@@ -281,8 +371,13 @@ export default function Wallet() {
                             <span className="text-xl font-bold text-primary">{usdtAmount} <span className="text-xs font-normal">USDT</span></span>
                         </div>
 
-                        <button type="submit" className="w-full bg-primary hover:bg-primaryHover text-black font-bold py-4 rounded-xl transition-all transform active:scale-[0.98]">
-                            Continuar para Pagamento
+                        <button type="submit" className="w-full bg-primary hover:bg-primaryHover text-black font-bold py-4 rounded-xl transition-all transform active:scale-[0.98] flex items-center justify-center gap-2">
+                            {processing ? (
+                                <>
+                                    <RefreshCcw className="animate-spin" size={20} />
+                                    <span>Processando...</span>
+                                </>
+                            ) : <span>Continuar para Pagamento</span>}
                         </button>
                     </form>
                 )}
@@ -355,6 +450,43 @@ export default function Wallet() {
                     </div>
                 )}
 
+                {step === 'qrcode' && (
+                    <div className="flex flex-col items-center justify-center py-6 animate-in zoom-in duration-300">
+                        <h3 className="text-xl font-bold text-white mb-4">Pagamento via PIX</h3>
+                        <div className="bg-white p-2 rounded-xl mb-4 relative group">
+                            <img src={pixQrCode} alt="PIX QR Code" className="w-48 h-48" />
+                            <button 
+                                onClick={downloadQrCode}
+                                className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-[#15222b] border border-white/20 text-white text-xs font-bold px-4 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 hover:bg-black transition whitespace-nowrap z-10"
+                            >
+                                <Download size={14} /> Salvar Imagem
+                            </button>
+                        </div>
+                        
+                        <div className="w-full bg-[#15222b] border border-white/5 rounded-lg p-3 flex items-center justify-between gap-3 mb-6">
+                            <div className="truncate text-xs font-mono text-textMuted flex-1 overflow-hidden">
+                                {pixCopyPaste}
+                            </div>
+                            <button onClick={() => copyToClipboard(pixCopyPaste)} className="p-2 hover:bg-white/10 rounded-lg transition text-[#00E701]">
+                                <Copy size={18} />
+                            </button>
+                        </div>
+
+                        <div className="flex gap-3 w-full mt-3">
+                            <button onClick={() => setStep('input')} className="flex-1 bg-surfaceHover text-white font-bold py-3.5 rounded-xl border border-white/10 hover:bg-white/10 transition">
+                                Cancelar
+                            </button>
+                            <button onClick={() => {
+                                setStep('success');
+                                fetchData();
+                                refreshUser();
+                            }} className="flex-1 bg-[#00E701] hover:bg-[#00c001] text-black font-bold py-3.5 rounded-xl shadow-[0_0_20px_rgba(0,231,1,0.2)]">
+                                Já Paguei
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {step === 'success' && (
                     <div className="flex flex-col items-center justify-center py-10 text-center animate-in zoom-in duration-300">
                         <div className="w-20 h-20 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mb-6">
@@ -375,21 +507,129 @@ export default function Wallet() {
         {/* WITHDRAW FLOW */}
         {activeTab === 'withdraw' && (
             <div className="p-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                <form onSubmit={handleWithdraw} className="space-y-6">
-                    <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                        <div className="flex justify-between items-center text-sm mb-2">
-                            <span className="text-textMuted">Carteira de Destino</span>
-                            <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">TRC20</span>
+                <div className="grid grid-cols-2 gap-2 mb-6">
+                    <button
+                        type="button"
+                        onClick={() => setPaymentMethod('pix')}
+                        className={`py-3 rounded-lg border flex flex-col items-center justify-center gap-1 transition ${
+                            paymentMethod === 'pix' 
+                            ? 'bg-green-500/10 border-green-500 text-green-500' 
+                            : 'bg-black/20 border-white/5 text-textMuted hover:bg-white/5'
+                        }`}
+                    >
+                        <span className="font-bold">PIX</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setPaymentMethod('usdt')}
+                        className={`py-3 rounded-lg border flex flex-col items-center justify-center gap-1 transition ${
+                            paymentMethod === 'usdt' 
+                            ? 'bg-primary/10 border-primary text-primary' 
+                            : 'bg-black/20 border-white/5 text-textMuted hover:bg-white/5'
+                        }`}
+                    >
+                        <span className="font-bold">USDT</span>
+                    </button>
+                </div>
+
+                <form onSubmit={async (e) => {
+                    if (paymentMethod === 'pix') {
+                         e.preventDefault();
+                         
+                         const val = parseFloat(amount);
+                         if (isNaN(val) || val < 10) return toast.error('Mínimo R$ 10,00');
+                         if (val > currentBalance) return toast.error('Saldo insuficiente');
+
+                         // Pre-validate CPF (Checksum)
+                         if (pixType === 'CPF') {
+                             const cleanCPF = pixKey.replace(/\D/g, '');
+                             if (!isValidCPF(cleanCPF)) {
+                                 return toast.error('CPF inválido. Verifique os dígitos.');
+                             }
+                         }
+
+                         setProcessing(true);
+                         try {
+                              await api.post('/vqpay/settle', {
+                                  amount: parseFloat(amount),
+                                  pin,
+                                  account_type: pixType,
+                                  // Clean CPF/Phone keys (only digits) to avoid gateway errors
+                                  account_key: pixType === 'CPF' || pixType === 'PHONE' ? pixKey.replace(/\D/g, '') : pixKey,
+                                  document: pixType === 'CPF' ? pixKey.replace(/\D/g, '') : undefined
+                              })
+                              toast.success('Saque PIX solicitado!')
+                              setAmount('')
+                              setPin('')
+                              fetchData()
+                         } catch (err: any) {
+                              toast.error(err.response?.data?.error || 'Erro Saque')
+                         } finally {
+                              setProcessing(false)
+                         }
+                    } else {
+                         handleWithdraw(e)
+                    }
+                }} className="space-y-6">
+                    
+                    {paymentMethod === 'usdt' ? (
+                        <div className="bg-white/5 rounded-xl p-4 border border-white/5">
+                            <div className="flex justify-between items-center text-sm mb-2">
+                                <span className="text-textMuted">Carteira de Destino</span>
+                                <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">TRC20</span>
+                            </div>
+                            <input 
+                                type="text" 
+                                value={withdrawAddress}
+                                onChange={e => setWithdrawAddress(e.target.value)}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-white focus:border-primary outline-none font-mono text-xs"
+                                placeholder="Cole seu endereço USDT (TRC20)"
+                                required
+                            />
                         </div>
-                        <input 
-                            type="text" 
-                            value={withdrawAddress}
-                            onChange={e => setWithdrawAddress(e.target.value)}
-                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-white focus:border-primary outline-none font-mono text-xs"
-                            placeholder="Cole seu endereço USDT (TRC20)"
-                            required
-                        />
-                    </div>
+                    ) : (
+                        <div className="space-y-4">
+                             <div className="bg-white/5 rounded-xl p-4 border border-white/5">
+                                <label className="block text-xs text-textMuted mb-2">Tipo de Chave PIX</label>
+                                <select 
+                                    value={pixType}
+                                    onChange={e => setPixType(e.target.value)}
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-white focus:border-primary outline-none"
+                                >
+                                    <option value="CPF">CPF</option>
+                                    <option value="PHONE">Celular</option>
+                                    <option value="EMAIL">E-mail</option>
+                                    <option value="CHAVE">Chave Aleatória</option>
+                                </select>
+                            </div>
+                            <div className="bg-white/5 rounded-xl p-4 border border-white/5">
+                                <label className="block text-xs text-textMuted mb-2">Chave PIX</label>
+                                <input 
+                                    type="text" 
+                                    value={pixKey}
+                                    onChange={e => {
+                                        let val = e.target.value
+                                        if (pixType === 'EMAIL') val = val.toLowerCase()
+                                        // For CPF/Phone we clean on submit but showing valid chars is good
+                                        setPixKey(val)
+                                    }}
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-white focus:border-primary outline-none"
+                                    placeholder={
+                                        pixType === 'CPF' ? '000.000.000-00 (11 dígitos)' : 
+                                        pixType === 'PHONE' ? '(00) 00000-0000' : 
+                                        pixType === 'EMAIL' ? 'seu@email.com' : 'Sua chave pix'
+                                    }
+                                    required
+                                />
+                                <div className="mt-1.5 text-[10px] text-textMuted">
+                                    {pixType === 'CPF' && 'Digite apenas os 11 números do seu CPF.'}
+                                    {pixType === 'PHONE' && 'Digite seu celular com DDD (11 dígitos) ou com código do país (55 + 11 dígitos).'}
+                                    {pixType === 'EMAIL' && 'Digite seu endereço de e-mail (tudo minúsculo).'}
+                                    {pixType === 'CHAVE' && 'Cole sua chave aleatória completa.'}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     <div>
                         <label className="block text-xs text-textMuted mb-2 uppercase font-bold">Valor do Saque (BRL)</label>
@@ -399,7 +639,6 @@ export default function Wallet() {
                                 type="number" 
                                 step="0.01"
                                 min="10"
-                                max={currentBalance}
                                 value={amount}
                                 onChange={e => setAmount(e.target.value)}
                                 className="w-full bg-black/40 border border-gray-700 rounded-xl py-4 pl-12 pr-4 text-2xl font-bold text-white focus:border-[#ff4d4d] focus:ring-1 focus:ring-[#ff4d4d] outline-none transition-all"
@@ -434,7 +673,7 @@ export default function Wallet() {
                         className="w-full bg-[#ff4d4d] hover:bg-red-600 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-red-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                         {processing && <RefreshCcw className="animate-spin" size={18} />}
-                        Confirmar Saque
+                        <span>Confirmar Saque</span>
                     </button>
                 </form>
             </div>

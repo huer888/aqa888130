@@ -29,7 +29,13 @@ export default function Team() {
               const userMax = res.data.commission_rate
               const code = res.data.invite_code || res.data.uid || res.data.id
               
-              setMaxRate(userMax)
+              // Special visual clamp for Master Account to match backend rule
+              if (code === '888888') {
+                  setMaxRate(Math.min(userMax, 0.06)) // Results in slider max of 0.05
+              } else {
+                  setMaxRate(userMax)
+              }
+              
               setInviteCode(code)
               
               // Set default slider: 2% gap if possible

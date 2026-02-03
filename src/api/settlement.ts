@@ -1,4 +1,5 @@
 import { Bindings } from '../bindings'
+import { getMatchResult } from './betsapi'
 
 async function getConfig(db: any, key: string): Promise<string | null> {
     const res = await db.prepare('SELECT value FROM system_config WHERE key = ?').bind(key).first()
@@ -24,63 +25,56 @@ export async function autoSettleBets(env: Bindings) {
 
     console.log(`[Settlement] Found ${matchIds.length} pending matches to check.`)
 
-    const baseUrl = 'https://api.oddspapi.io/v4'
-
     // 2. Fetch Results for each match
     // We limit concurrency to avoid rate limits
     for (const matchId of matchIds) {
         try {
-            // Check if it's a mock ID (dev mode)
-            if (matchId.startsWith('mock')) continue
+            // Check if it's a mock ID (dev mode) or parlay
+            if (matchId.startsWith('mock') || matchId === 'parlay') continue
 
-            // Try to fetch single fixture details
-            // Correct Endpoint for Oddspapi: /fixtures?fixtureId={id}
-            const res = await fetch(`${baseUrl}/fixtures?fixtureId=${matchId}&apiKey=${apiKey}`)
-            
-            if (!res.ok) {
-                console.error(`[Settlement] API Error ${res.status} for match ${matchId}`)
-                continue
-            }
-
-            const data = await res.json()
-            // API returns array of fixtures
-            const fixture = Array.isArray(data) && data.length > 0 ? data[0] : null
+            const fixture = await getMatchResult(matchId, apiKey)
 
             if (!fixture) {
                 // Match not found in API (might be too old or invalid ID)
                 continue
             }
 
-            // Check if finished
-            // status: 'Finished', 'FT', 'AET', 'Pen', 'Ended'
-            const status = fixture.status?.toLowerCase() || ''
-            if (['finished', 'ft', 'aet', 'pen', 'ended'].includes(status)) {
+            // Check if finished (BetsAPI status '3' means Ended)
+            // Or look at time_status
+            const status = fixture.time_status || ''
+            if (status === '3') {
                 
-                // Extract Scores - Oddspapi structure usually:
-                // scores: { home: "2", away: "1", ... } OR results inside the object
-                // Based on standard schemas for this provider:
-                // It might have `homeScore` / `awayScore` at root, or `livescore` object.
+                // Extract Scores - BetsAPI structure
+                // fixture.ss (e.g., "2-1")
+                // fixture.scores.2.home / away
                 
-                // We try multiple paths to be safe
                 let homeScore = 0
                 let awayScore = 0
                 
-                if (fixture.homeScore !== undefined) homeScore = parseInt(fixture.homeScore)
-                else if (fixture.score?.home !== undefined) homeScore = parseInt(fixture.score.home)
-                
-                if (fixture.awayScore !== undefined) awayScore = parseInt(fixture.awayScore)
-                else if (fixture.score?.away !== undefined) awayScore = parseInt(fixture.score.away)
+                if (fixture.ss) {
+                    const parts = fixture.ss.split('-')
+                    if (parts.length === 2) {
+                        homeScore = parseInt(parts[0])
+                        awayScore = parseInt(parts[1])
+                    }
+                } else if (fixture.scores && fixture.scores['2']) {
+                    homeScore = parseInt(fixture.scores['2'].home)
+                    awayScore = parseInt(fixture.scores['2'].away)
+                }
                 
                 let result = 'Draw'
-                if (homeScore > awayScore) result = fixture.participant1Name // Home Team Name
-                else if (awayScore > homeScore) result = fixture.participant2Name // Away Team Name
+                const homeName = fixture.home.name
+                const awayName = fixture.away.name
+                
+                if (homeScore > awayScore) result = homeName
+                else if (awayScore > homeScore) result = awayName
                 
                 console.log(`[Settlement] Match ${matchId} Finished. Score: ${homeScore}-${awayScore}. Winner: ${result}`)
                 
                 // Settle all bets for this match
-                await settleMatch(db, matchId, result, fixture.participant1Name, fixture.participant2Name)
+                await settleMatch(db, matchId, result, homeName, awayName)
             } else {
-                // console.log(`[Settlement] Match ${matchId} is ${fixture.status} (Not finished)`)
+                // console.log(`[Settlement] Match ${matchId} status is ${status} (Not finished)`)
             }
 
         } catch (e) {

@@ -137,9 +137,9 @@ export default function Profile() {
                  </div>
              </div>
              <div className="bg-surface p-4 rounded-xl border border-gray-800 shadow-sm">
-                 <div className="text-xs text-textMuted uppercase font-bold mb-1">Total Comissões</div>
-                 <div className="text-xl font-bold text-primary flex items-center gap-2">
-                     R$ {Number(totalCommission || 0).toFixed(2)}
+                 <div className="text-xs text-textMuted uppercase font-bold mb-1">Bônus</div>
+                 <div className="text-xl font-bold text-yellow-400 flex items-center gap-2">
+                     R$ {Number(user.bonus || 0).toFixed(2)}
                  </div>
              </div>
          </div>
@@ -169,14 +169,14 @@ export default function Profile() {
                     user.kyc_status === 'pending' ? 'text-yellow-400' :
                     'text-red-400'
                 }`}>
-                    {user.kyc_status === 'verified' ? 'Identidade Verificada' : user.kyc_status === 'rejected' ? 'Verificação Recusada' : 'Verificar Identidade'}
+                    {user.kyc_status === 'verified' ? 'Identidade Verificada' : user.kyc_status === 'rejected' ? 'Verificação Recusada' : 'Verificar e Ganhar R$20'}
                 </div>
                 <div className={`text-[10px] uppercase font-bold tracking-wider ${
                     user.kyc_status === 'verified' ? 'text-green-300/70' :
                     user.kyc_status === 'pending' ? 'text-yellow-300/70' :
                     'text-red-300/70'
                 }`}>
-                    {user.kyc_status === 'verified' ? 'Aprovado' : user.kyc_status === 'pending' ? 'Em Análise' : user.kyc_status === 'rejected' ? 'Tente Novamente' : 'Não verificado'}
+                    {user.kyc_status === 'verified' ? 'Aprovado' : user.kyc_status === 'pending' ? 'Em Análise' : user.kyc_status === 'rejected' ? 'Tente Novamente' : 'Ganhe Bônus de Cadastro'}
                 </div>
                 </div>
             </div>
@@ -186,7 +186,7 @@ export default function Profile() {
                     onClick={() => setShowKyc(true)}
                     className="text-xs bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-bold transition-colors shadow-lg shadow-red-500/20 flex items-center gap-2"
                 >
-                    {user.kyc_status === 'rejected' ? 'Reenviar' : 'Verificar'}
+                    {user.kyc_status === 'rejected' ? 'Reenviar' : 'Resgatar'}
                 </button>
             )}
         </div>
@@ -240,7 +240,7 @@ export default function Profile() {
         <MenuLink 
            icon={Lock} 
            title="Centro de Segurança" 
-           subtitle="Senha e PIN"
+           subtitle="Senha, PIN e Métodos de Saque"
            onClick={() => setShowSecurity('password')}
         />
         <MenuLink 

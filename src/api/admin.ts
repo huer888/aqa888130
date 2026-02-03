@@ -14,6 +14,18 @@ publicConfig.get('/', async (c) => {
 
 admin.use('*', authMiddleware)
 
+// Get Visit Stats
+admin.get('/stats/visits', async (c) => {
+    try {
+        const daily = await c.env.DB.prepare('SELECT * FROM daily_visits ORDER BY date DESC LIMIT 30').all()
+        const total = await c.env.DB.prepare('SELECT SUM(count) as total FROM daily_visits').first<any>()
+        return c.json({ daily: daily.results, total: total?.total || 0 })
+    } catch (e) {
+        console.error('Stats Error:', e)
+        return c.json({ daily: [], total: 0 })
+    }
+})
+
 // Get Orders (Enhanced with user details)
 admin.get('/orders', async (c) => {
   const { status } = c.req.query()
@@ -174,10 +186,24 @@ admin.get('/user/:id', async (c) => {
         const withdrawals = await c.env.DB.prepare("SELECT SUM(amount) as total FROM transactions WHERE user_id = ? AND type = 'withdraw' AND status = 'completed'").bind(id).first<any>()
         const bets = await c.env.DB.prepare("SELECT SUM(amount) as total FROM transactions WHERE user_id = ? AND type = 'bet' AND status = 'completed'").bind(id).first<any>()
         
+        // Get Upline & Downline
+        const upline = await c.env.DB.prepare('SELECT uid FROM users WHERE id = ?').bind(user.parent_id).first<any>()
+        const downline = await c.env.DB.prepare('SELECT uid FROM users WHERE parent_id = ?').bind(id).all()
+
         user.stats = {
             total_deposits: deposits?.total || 0,
             total_withdrawals: withdrawals?.total || 0,
             total_bets: bets?.total || 0
+        }
+        
+        user.upline_uid = upline?.uid || null
+        user.downline_uids = downline.results ? downline.results.map((u: any) => u.uid) : []
+
+        // Expose withdrawal details safely
+        if (user.pix_info) {
+            try {
+                user.pix_info_parsed = JSON.parse(user.pix_info)
+            } catch (e) { user.pix_info_parsed = null }
         }
     }
     
@@ -217,12 +243,21 @@ admin.post('/user/:id/kyc', async (c) => {
     await c.env.DB.prepare('UPDATE users SET kyc_status = ? WHERE id = ?').bind(status, id).run()
     
     // Send Notification regardless of status
-    const user = await c.env.DB.prepare('SELECT uid FROM users WHERE id = ?').bind(id).first<any>()
+    const user = await c.env.DB.prepare('SELECT uid, kyc_bonus_claimed FROM users WHERE id = ?').bind(id).first<any>()
     if (user) {
         if (status === 'rejected') {
             await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(user.uid, 'Falha na Verificação', `Motivo: ${reason || 'Documentos inválidos'}. Por favor, entre em contato com o suporte no Centro Pessoal para resolver.`).run()
         } else if (status === 'verified') {
-            await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(user.uid, 'Verificação Aprovada', 'Sua identidade foi verificada com sucesso.').run()
+            const batch = []
+            batch.push(c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(user.uid, 'Verificação Aprovada', 'Sua identidade foi verificada com sucesso.'))
+            
+            // Give Bonus if first time
+            if (!user.kyc_bonus_claimed) {
+                batch.push(c.env.DB.prepare('UPDATE users SET bonus = bonus + 20, kyc_bonus_claimed = 1 WHERE id = ?').bind(id))
+                batch.push(c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(user.uid, 'Bônus de KYC', 'Você recebeu R$ 20,00 de bônus por verificar sua conta!'))
+            }
+            
+            await c.env.DB.batch(batch)
         }
     }
     
@@ -321,6 +356,49 @@ admin.delete('/matches/:id', async (c) => {
     const id = c.req.param('id')
     await c.env.DB.prepare('DELETE FROM manual_matches WHERE id = ?').bind(id).run()
     return c.json({ success: true })
+})
+
+// Update Exchange Rate
+admin.post('/config/rate', async (c) => {
+    const { rate } = await c.req.json()
+    const newRate = parseFloat(rate)
+    
+    if (!newRate || newRate <= 0) {
+        return c.json({ error: 'Invalid rate' }, 400)
+    }
+
+    await c.env.DB.prepare("INSERT OR REPLACE INTO exchange_rates (pair, rate, updated_at) VALUES ('USDT_BRL', ?, ?)").bind(newRate, Date.now()).run()
+    return c.json({ success: true, rate: newRate })
+})
+
+// Sync Real-time Rate (AwesomeAPI)
+admin.post('/config/rate/sync', async (c) => {
+    try {
+        console.log('[Rate Sync] Fetching from AwesomeAPI...')
+        const resp = await fetch('https://economia.awesomeapi.com.br/json/last/USDT-BRL')
+        
+        if (!resp.ok) throw new Error('API Request Failed')
+        
+        const data: any = await resp.json()
+        // Data format: { USDTBRL: { bid: "5.85", ... } }
+        
+        if (!data.USDTBRL || !data.USDTBRL.bid) {
+            throw new Error('Invalid API Response')
+        }
+
+        const realRate = parseFloat(data.USDTBRL.bid)
+        
+        // Safety check
+        if (isNaN(realRate) || realRate <= 0) throw new Error('Invalid Rate Value')
+
+        // Update DB
+        await c.env.DB.prepare("INSERT OR REPLACE INTO exchange_rates (pair, rate, updated_at) VALUES ('USDT_BRL', ?, ?)").bind(realRate, Date.now()).run()
+        
+        return c.json({ success: true, rate: realRate })
+    } catch (e: any) {
+        console.error('[Rate Sync Error]', e)
+        return c.json({ error: 'Failed to sync: ' + e.message }, 500)
+    }
 })
 
 export { publicConfig }
