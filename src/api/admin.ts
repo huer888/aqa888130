@@ -406,6 +406,75 @@ admin.get('/users', async (c) => {
     })
 })
 
+// Get Group Management Stats
+admin.get('/groups', async (c) => {
+    // 1. Get all Group Owners
+    const owners = await c.env.DB.prepare(`
+        SELECT id, uid, telegram_username, owned_group_id, created_at 
+        FROM users 
+        WHERE owned_group_id IS NOT NULL
+    `).all();
+
+    if (!owners.results || owners.results.length === 0) {
+        return c.json([]);
+    }
+
+    // 2. Aggregate Member Counts per Group
+    const memberCounts = await c.env.DB.prepare(`
+        SELECT telegram_group_id, COUNT(*) as count 
+        FROM users 
+        WHERE telegram_group_id IS NOT NULL 
+        GROUP BY telegram_group_id
+    `).all();
+
+    // Map for fast lookup
+    const memberMap = new Map();
+    memberCounts.results.forEach((row: any) => {
+        memberMap.set(String(row.telegram_group_id), row.count);
+    });
+
+    // 3. Aggregate Financials per Group (Deposits & Bets)
+    // We only care about COMPLETED transactions
+    const financials = await c.env.DB.prepare(`
+        SELECT u.telegram_group_id, t.type, SUM(t.amount) as total
+        FROM transactions t
+        JOIN users u ON t.user_id = u.id
+        WHERE u.telegram_group_id IS NOT NULL 
+          AND t.status = 'completed'
+          AND t.type IN ('deposit', 'bet', 'commission')
+        GROUP BY u.telegram_group_id, t.type
+    `).all();
+
+    // Nested Map: GroupID -> Type -> Amount
+    const financeMap = new Map();
+    financials.results.forEach((row: any) => {
+        const gid = String(row.telegram_group_id);
+        if (!financeMap.has(gid)) financeMap.set(gid, {});
+        financeMap.get(gid)[row.type] = row.total;
+    });
+
+    // 4. Combine Data
+    const groups = owners.results.map((owner: any) => {
+        const gid = String(owner.owned_group_id);
+        const fins = financeMap.get(gid) || {};
+        
+        return {
+            group_id: gid,
+            owner_uid: owner.uid,
+            owner_username: owner.telegram_username || 'Unknown',
+            member_count: memberMap.get(gid) || 0,
+            total_deposit: fins['deposit'] || 0,
+            total_bet: fins['bet'] || 0, // Performance/Turnover
+            total_commission: fins['commission'] || 0
+        };
+    });
+
+    // Sort by Total Deposit DESC
+    groups.sort((a: any, b: any) => b.total_deposit - a.total_deposit);
+
+    return c.json(groups);
+})
+
 // Unbind Telegram
 admin.post('/user/:id/unbind', async (c) => {
     const id = c.req.param('id')

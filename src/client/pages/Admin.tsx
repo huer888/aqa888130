@@ -188,6 +188,7 @@ export default function Admin() {
   const [orders, setOrders] = useState<any[]>([])
   const [txs, setTxs] = useState<any[]>([])
   const [users, setUsers] = useState<any[]>([])
+  const [groups, setGroups] = useState<any[]>([]) // New State for Groups
   const [config, setConfig] = useState<any>({ bot_buttons: '[]', bot_welcome: '' })
   const [stats, setStats] = useState<{total: number, daily: any[]}>({total: 0, daily: []})
   const [loading, setLoading] = useState(false)
@@ -250,6 +251,10 @@ export default function Admin() {
         setData(res.data)
         setUsers(res.data.data)
       } 
+      if (tab === 'groups') {
+        const res = await api.get('/admin/groups')
+        setGroups(res.data)
+      }
       if (tab === 'bot') {
         const res = await api.get('/admin/bot-config')
         setConfig(res.data)
@@ -373,6 +378,7 @@ export default function Admin() {
               <SidebarItem id="orders" icon={LayoutDashboard} label="注单管理" />
               <SidebarItem id="finance" icon={Wallet} label="财务审核" />
               <SidebarItem id="users" icon={Users} label="用户列表" />
+              <SidebarItem id="groups" icon={Users} label="群组管理" />
               <SidebarItem id="bot" icon={MessageSquare} label="机器人管理" />
               <SidebarItem id="settings" icon={Settings} label="系统配置" />
               <SidebarItem id="notify" icon={Bell} label="消息通知" />
@@ -536,6 +542,46 @@ export default function Admin() {
                       </tbody>
                   </table>
                   <Pagination page={data.page} lastPage={data.last_page} setPage={setPage} />
+              </div>
+          )}
+
+          {tab === 'groups' && (
+              <div className="bg-[#1a2c38] rounded-xl border border-gray-800 overflow-hidden">
+                  <div className="p-4 border-b border-gray-800">
+                      <h3 className="font-bold">群组管理 (Group Management)</h3>
+                  </div>
+                  <table className="w-full text-sm text-left">
+                      <thead className="bg-black/20 text-gray-400 font-bold uppercase text-xs">
+                          <tr>
+                              <th className="p-4">Group ID</th>
+                              <th className="p-4">Owner (群主)</th>
+                              <th className="p-4 text-center">成员数</th>
+                              <th className="p-4 text-right">总充值</th>
+                              <th className="p-4 text-right">总流水 (Bets)</th>
+                              <th className="p-4 text-right">总佣金</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                          {groups.map(g => (
+                              <tr key={g.group_id} className="hover:bg-white/5">
+                                  <td className="p-4 font-mono text-xs text-gray-500">{g.group_id}</td>
+                                  <td className="p-4">
+                                      <div className="font-bold text-white">{g.owner_username ? `@${g.owner_username}` : 'Unknown'}</div>
+                                      <div className="text-xs text-gray-500 font-mono">UID: {g.owner_uid}</div>
+                                  </td>
+                                  <td className="p-4 text-center font-bold text-blue-400">{g.member_count}</td>
+                                  <td className="p-4 text-right font-mono text-green-400">R$ {Number(g.total_deposit).toFixed(2)}</td>
+                                  <td className="p-4 text-right font-mono text-white">R$ {Number(g.total_bet).toFixed(2)}</td>
+                                  <td className="p-4 text-right font-mono text-yellow-400">R$ {Number(g.total_commission).toFixed(2)}</td>
+                              </tr>
+                          ))}
+                          {groups.length === 0 && (
+                              <tr>
+                                  <td colSpan={6} className="p-8 text-center text-gray-500">暂无群组数据</td>
+                              </tr>
+                          )}
+                      </tbody>
+                  </table>
               </div>
           )}
 
