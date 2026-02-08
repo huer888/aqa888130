@@ -5,20 +5,25 @@ export async function getTemplate(db: any, key: string, params: Record<string, a
     const res = await db.prepare('SELECT value FROM system_config WHERE key = ?').bind(key).first();
     let tpl = res?.value || '';
     
-    // Fallbacks (Updated to new Leader/Member format)
+    // Fallbacks (Updated for Brazil Market Hype & Fission)
     if (!tpl) {
-        if (key === 'tpl_bet') tpl = `🎰 <b>NOVA APOSTA!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💸 <b>Apostou:</b> R$ {amount}\n🎯 <b>Potencial:</b> R$ {potential}\n\n🚀 <i>A sorte favorece os audazes!</i>`;
+        // 1. New Bet - Create FOMO
+        if (key === 'tpl_bet') tpl = `🎰 <b>NOVA APOSTA!</b>\n\n👤 <b>Membro:</b> {mention}\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💸 <b>Valor:</b> R$ {amount}\n🎯 <b>Potencial:</b> R$ {potential}\n\n🔥 <i>O mercado está aquecido! Faça sua análise!</i>`;
         
-        if (key === 'tpl_win') tpl = `🟢 <b>VITÓRIA (WIN)!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💰 <b>Ganhou:</b> <b>R$ {profit}</b>\n📈 <b>Odd:</b> {odds}x\n\n🚀 <i>O método é infalível! Quem é o próximo?</i>`;
+        // 2. Win - Celebrate Profit ("Forra")
+        if (key === 'tpl_win') tpl = `🟢 <b>GREEN! VITÓRIA!</b>\n\n👤 <b>Membro:</b> {mention}\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💰 <b>LUCRO:</b> <b>R$ {profit}</b>\n📈 <b>Odd:</b> {odds}x\n\n🤑 <i>Lucro no bolso! Quem será o próximo a forrar?</i>`;
         
-        if (key === 'tpl_deposit') tpl = `💎 <b>DEPÓSITO REALIZADO!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💵 <b>Valor:</b> <b>R$ {amount}</b>\n✅ <b>Status:</b> Confirmado\n\n🚀 <i>Munição carregada! Bora buscar o lucro!</i>`;
+        // 3. Deposit - Multiplication Mindset
+        if (key === 'tpl_deposit') tpl = `💎 <b>DEPÓSITO CONFIRMADO!</b>\n\n👤 <b>Membro:</b> {mention}\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💵 <b>Valor:</b> <b>R$ {amount}</b>\n✅ <b>Status:</b> Banca Carregada!\n\n🚀 <i>Preparado para multiplicar! Boa sorte!</i>`;
         
-        if (key === 'tpl_withdraw') tpl = `🏦 <b>SAQUE APROVADO!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💰 <b>Recebeu:</b> <b>R$ {amount}</b>\n⚡ <b>Processamento:</b> Concluído\n\n🚀 <i>Dinheiro na conta! Parabéns pelo resultado!</i>`;
+        // 4. Withdraw - Social Proof (Real Money)
+        if (key === 'tpl_withdraw') tpl = `🏦 <b>SAQUE REALIZADO!</b>\n\n👤 <b>Membro:</b> {mention}\n🆔 <b>UID:</b> <code>{uid}</code>\n\n💸 <b>Recebeu:</b> <b>R$ {amount}</b>\n⚡ <b>Via:</b> PIX/USDT\n\n🏆 <i>Dinheiro real na conta! O resultado vem!</i>`;
 
-        // Downline Fallbacks
-        if (key === 'tpl_commission') tpl = `💰 <b>BÔNUS DE EQUIPE!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n🤝 <b>Você lucrou com sua rede!</b>\n\n🆔 <b>Fonte (Sub):</b> <code>{source_uid}</code>\n💵 <b>Sua Comissão:</b> <b>R$ {amount}</b>\n\n🚀 <i>Isso é renda passiva! Você dorme e o dinheiro cai!</i>`;
+        // 5. Commission (Agent) - Passive Income Hype
+        if (key === 'tpl_commission') tpl = `💰 <b>COMISSÃO RECEBIDA!</b>\n\n👤 <b>Líder:</b> {mention}\n🤝 <b>Origem:</b> Rede / Sub-Agentes\n\n🆔 <b>Fonte:</b> <code>{source_uid}</code>\n💵 <b>Ganho:</b> <b>R$ {amount}</b>\n\n💎 <i>Sua rede trabalha por você! Renda 100% passiva.</i>`;
         
-        if (key === 'tpl_downline_bet') tpl = `🎰 <b>AÇÃO NA EQUIPE!</b>\n\n🎉 <b>Parabéns membro {mention}</b>\n👇 <b>Sua rede está ativa!</b>\n\n🆔 <b>Fonte (Sub):</b> <code>{source_uid}</code>\n💸 <b>Apostou:</b> R$ {amount}\n\n🚀 <i>Quanto maior a equipe, maior o lucro!</i>`;
+        // 6. Downline Activity - Volume/Turnover focus
+        if (key === 'tpl_downline_bet') tpl = `📊 <b>MOVIMENTAÇÃO NA REDE!</b>\n\n👤 <b>Líder:</b> {mention}\n👇 <b>Status da Equipe:</b>\n\n🆔 <b>Membro:</b> <code>{source_uid}</code>\n💸 <b>Gerou Volume:</b> R$ {amount}\n\n🚀 <i>Volume gera lucro! Continue expandindo seu time.</i>`;
     }
 
     // 2. Enrich with User Stats if userId provided
