@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { Bindings } from '../bindings'
 import { authMiddleware } from '../middleware'
 import { createHash } from 'crypto'
+import { sendTgMessage } from '../utils/telegram' // Import Telegram Utility
 
 const vqpay = new Hono<{ Bindings: Bindings, Variables: { user: any } }>()
 
@@ -44,21 +45,8 @@ vqpay.post('/pay', authMiddleware, async (c) => {
         const orderId = `DEP_${Date.now()}_${user.id}`
         
         // --- NOTIFICATION URL LOGIC ---
-        // Critical for Production: Must be a valid public URL.
-        // We prioritize the host header, but if it's localhost, we fallback to a placeholder
-        // or the user's public IP if known.
-        
-        let origin = 'http://45.145.73.138:3000' // Default to your server IP
-        
-        try {
-            const host = c.req.header('host')
-            // For production, we trust the host header if it's not localhost
-            // We also handle potential port issues if behind proxy
-            if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
-                 const protocol = c.req.header('x-forwarded-proto') || 'http'
-                 origin = `${protocol}://${host}`
-            }
-        } catch (e) {}
+        // FORCE USE THE CORRECT DOMAIN
+        const origin = 'https://stakeparceiros.vip'
         
         const notifyUrl = `${origin}/api/vqpay/notify/pay`
         console.log('[VQPay] Using Notify URL:', notifyUrl)
@@ -208,6 +196,18 @@ vqpay.post('/notify/pay', async (c) => {
             await c.env.DB.prepare("UPDATE users SET balance = IFNULL(balance, 0) + ? WHERE id = ?").bind(amount, tx.user_id).run()
             
             console.log(`[VQPay] Deposit Confirmed: ${orderId} Amount: ${amount}`)
+            
+            // Fetch user info for better notification
+            const uInfo = await c.env.DB.prepare("SELECT uid, email FROM users WHERE id = ?").bind(tx.user_id).first<any>()
+            
+            // TG Notify
+            sendTgMessage(
+                `💰 <b>充值到账通知</b>\n\n` +
+                `👤 用户UID: <code>${uInfo?.uid || tx.user_id}</code>\n` +
+                `📧 账号: ${uInfo?.email || '未知'}\n` +
+                `💵 金额: <b>R$ ${amount.toFixed(2)}</b>\n` +
+                `🆔 订单: <code>${orderId}</code>`
+            )
         }
     }
 
@@ -232,16 +232,9 @@ vqpay.post('/settle', authMiddleware, async (c) => {
     }
 
     const orderId = `WTH_${Date.now()}_${user.id}`
-    let origin = 'http://45.145.73.138:3000'
-    try {
-        const host = c.req.header('host')
-        if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
-            const protocol = c.req.header('x-forwarded-proto') || 'http'
-            origin = `${protocol}://${host}`
-        }
-    } catch (e) {
-        console.warn('Could not determine origin, using default')
-    }
+    // FORCE DOMAIN FOR WITHDRAW TOO
+    const origin = 'https://stakeparceiros.vip'
+    
     const notifyUrl = `${origin}/api/vqpay/notify/settle`
 
     // Determine Payee Account Type and Value
@@ -271,11 +264,14 @@ vqpay.post('/settle', authMiddleware, async (c) => {
     // Deduct Balance First (Lock funds)
     await c.env.DB.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").bind(amount, user.id).run()
 
-    // Create Transaction
+    // Create Transaction (STORE ACCOUNT INFO PERMANENTLY)
+    // We use 'wallet_address' column to store the PIX key/details for manual processing
+    const withdrawInfo = `[${vqAccountType}] ${vqAccount}`
+    
     const txRes = await c.env.DB.prepare(`
-        INSERT INTO transactions (user_id, type, amount, status, note, tx_hash, created_at)
-        VALUES (?, 'withdraw', ?, 'pending', ?, ?, CURRENT_TIMESTAMP)
-    `).bind(user.id, amount, `VQPay Withdraw: ${orderId}`, orderId).run()
+        INSERT INTO transactions (user_id, type, amount, status, note, tx_hash, wallet_address, created_at)
+        VALUES (?, 'withdraw', ?, 'pending', ?, ?, ?, CURRENT_TIMESTAMP)
+    `).bind(user.id, amount, `VQPay Withdraw: ${orderId}`, orderId, withdrawInfo).run()
 
     const payload = {
         merchant_no: config.MERCHANT_NO,
@@ -303,6 +299,28 @@ vqpay.post('/settle', authMiddleware, async (c) => {
         
         console.log('[VQPay Settle] Payload:', JSON.stringify(payload))
 
+        // TG Notify Request
+        const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+        const ua = c.req.header('user-agent') || 'Unknown Device'
+        sendTgMessage(
+            `💸 <b>新提现申请 (PIX)</b>\n\n` +
+            `👤 用户UID: <code>${user.uid}</code>\n` +
+            `📧 账号: ${user.email}\n` +
+            `💵 金额: <b>R$ ${Number(amount).toFixed(2)}</b>\n` +
+            `🏦 类型: ${vqAccountType}\n` +
+            `🔑 账号: ${vqAccount}\n` +
+            `🌍 IP: ${ip}\n` +
+            `📱 设备: ${ua}\n` +
+            `⏳ 状态: <b>待审核</b>`
+        )
+
+        // Manual Approval Mode: STOP HERE
+        // Do NOT call VQPAY API automatically.
+        // Just return success so UI shows "Pending".
+        return c.json({ success: true, message: 'Solicitação de saque enviada para análise' })
+
+    /* 
+    // --- DISABLED AUTO WITHDRAW ---
     try {
         const resp = await fetch(`${config.API_URL}/api/settle/settlement`, {
             method: 'POST',
@@ -347,6 +365,8 @@ vqpay.post('/settle', authMiddleware, async (c) => {
         await c.env.DB.prepare("UPDATE transactions SET status = 'failed' WHERE id = ?").bind(txRes.meta.last_row_id).run()
         return c.json({ error: 'Internal Error' }, 500)
     }
+    */
+    // End disabled block
 })
 
 // 4. Settlement Callback

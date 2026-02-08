@@ -60,9 +60,12 @@ export function UserProvider({ children }: { children: ReactNode }) {
       if (meRes.data && infoRes.data) {
           setUser({
               ...meRes.data,
-              balance: Number(infoRes.data.balance || 0),
-              commission_balance: Number(infoRes.data.commission_balance || 0),
-              payment_pin: infoRes.data.has_pin ? '***' : null, // Simplification
+              // Fix: Trust /user/me balance first, fallback to /wallet/info only if necessary
+              // This prevents 0.00 overwrite if wallet info is partial
+              balance: Number(meRes.data.balance ?? infoRes.data.balance ?? 0),
+              commission_balance: Number(meRes.data.commission_balance ?? infoRes.data.commission_balance ?? 0),
+              
+              payment_pin: infoRes.data.has_pin ? '***' : null, 
               usdt_address: infoRes.data.usdt_address
           })
       }
@@ -87,8 +90,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     fetchAll()
-    // Poll every 30s
-    const interval = setInterval(fetchAll, 30000)
+    // Poll every 5s for realtime balance updates
+    const interval = setInterval(fetchAll, 5000)
     return () => clearInterval(interval)
   }, [fetchAll])
 

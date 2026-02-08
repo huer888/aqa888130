@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
-import { Trophy, Wallet, Users, User, FileText, Bell, ChevronDown } from 'lucide-react'
+import { Trophy, Wallet, Users, User, FileText, Bell, ChevronDown, RefreshCcw } from 'lucide-react'
 import clsx from 'clsx'
 import Logo from './Logo'
 import { useState, useEffect } from 'react'
@@ -10,9 +10,30 @@ import { useUser } from '../context/UserContext'
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user, notifications } = useUser()
+  const { user, notifications, refreshUser } = useUser()
   const [showNotif, setShowNotif] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [directBalance, setDirectBalance] = useState<number | null>(null)
+
+  // Direct fetch to bypass potential context sync issues
+  useEffect(() => {
+      if(user) {
+          api.get('/wallet/info').then(res => {
+              if(res.data) setDirectBalance(Number(res.data.balance || 0))
+          }).catch(() => {})
+      }
+  }, [location.pathname, user]) // Re-fetch on navigation or user change
+
+  const handleRefreshBalance = async () => {
+      setIsRefreshing(true)
+      await refreshUser()
+      // Also refresh direct balance
+      api.get('/wallet/info').then(res => {
+          if(res.data) setDirectBalance(Number(res.data.balance || 0))
+      }).catch(() => {})
+      setTimeout(() => setIsRefreshing(false), 500)
+  }
 
   const checkAuth = (e?: any, path?: string) => {
       if (!localStorage.getItem('token')) {
@@ -49,10 +70,12 @@ export default function Layout() {
       <header className="bg-[#1a2c38] px-4 py-3 sticky top-0 z-20 flex items-center justify-between border-b border-[#213743]">
         <div className="flex items-center gap-3">
            <Logo size="sm" />
-           <div onClick={(e) => checkAuth(e, '/wallet')} className="flex items-center gap-2 bg-[#0f212e] rounded px-3 py-1.5 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors">
-               <span className="text-xs font-bold text-white tracking-wide">{Number(user?.balance || 0).toFixed(2)} <span className="text-primary">R$</span></span>
-               <ChevronDown size={12} className="text-textMuted" />
-           </div>
+           {user && (
+               <div className="flex items-center gap-2 bg-black/30 rounded-lg px-2 py-1 border border-white/5" onClick={handleRefreshBalance}>
+                   <span className="text-[#00E701] font-bold font-mono text-xs">R$ {Number(directBalance ?? user.balance).toFixed(2)}</span>
+                   <RefreshCcw size={10} className={clsx("text-textMuted", isRefreshing && "animate-spin")} />
+               </div>
+           )}
         </div>
         
         <div className="flex items-center gap-3">

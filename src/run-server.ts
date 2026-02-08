@@ -1,10 +1,14 @@
+import 'dotenv/config'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { compress } from 'hono/compress' // Optimization: Gzip
 import { serveStatic } from '@hono/node-server/serve-static'
 import Database from 'better-sqlite3'
-import { readFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import path from 'path'
+
+import bot from './api/bot'
 
 // Import API routes
 import auth from './api/auth'
@@ -17,6 +21,8 @@ import vqpay from './api/vqpay'
 import { autoSettleBets } from './api/settlement'
 import { updateSportsData } from './api/sports'
 import { visitMiddleware } from './visitMiddleware'
+import { startSupportBot } from './bot/support'
+import { sendTgMessage } from './utils/telegram'
 
 const port = parseInt(process.env.PORT || '3000')
 const app = new Hono()
@@ -26,73 +32,50 @@ const db = new Database('local.sqlite')
 db.pragma('journal_mode = WAL')
 console.log('✅ Connected to Local SQLite Database (WAL Mode)')
 
-// Start Auto-Settlement Interval (Every 5 minutes)
-console.log('⏰ Starting Auto-Settlement Job...')
+// --- OPTIMIZATION 1: Ensure Indices ---
+function ensureIndices() {
+    console.log('🔧 Verifying Database Indices...');
+    const indices = [
+        "CREATE INDEX IF NOT EXISTS idx_bets_user ON bets(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_bets_match ON bets(match_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tx_user ON transactions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_users_parent ON users(parent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_notif_target ON notifications(target_uid)"
+    ];
+    indices.forEach(sql => db.prepare(sql).run());
+    console.log('✅ Indices Optimized');
+}
+ensureIndices();
+
+// --- OPTIMIZATION 4: Auto-Backup ---
+const BACKUP_DIR = './backups';
+try { mkdirSync(BACKUP_DIR, { recursive: true }); } catch(e) {}
+
 setInterval(() => {
-    // Construct a mock environment to pass DB
-    const mockEnv = {
-        DB: {
-            prepare: (query: string) => db.prepare(query),
-            batch: async (statements: any[]) => {
-                 const runTransaction = db.transaction((stmts) => {
-                     for(const s of stmts) db.prepare(s.sourceSQL || s._sql).run(...(s.params || s._args || []))
-                 })
-                 // We need to fix the Mock Statement structure in settlement.ts to match what we use here
-                 // or adapt here. The best way is to reuse the 'prepare' wrapper I defined below 
-                 // but that's inside the middleware.
-                 
-                 // Let's rely on the middleware definition? No, we are outside request context.
-                 // We need to pass a compatible DB object to autoSettleBets.
-                 // Let's fix this block to properly wrap the DB for the helper function.
-            }
-        },
-        ODDS_API_KEY: process.env.ODDS_API_KEY || "244533-KG7TshXWJYPVVd"
-    } as any
-    
-    // We need a robust DB wrapper for the standalone function
-    mockEnv.DB.prepare = (query: string) => {
-        const stmt = db.prepare(query)
-        return {
-            _sql: query,
-            bind: (...args: any[]) => ({ 
-                _sql: query, 
-                _args: args, 
-                first: () => stmt.get(...args), 
-                all: () => ({ results: stmt.all(...args) }),
-                run: () => {
-                    const res = stmt.run(...args);
-                    return { meta: { last_row_id: res.lastInsertRowid, changes: res.changes } }
-                }
-            }),
-            first: () => stmt.get(),
-            all: () => ({ results: stmt.all() })
-        }
-    }
-    
-    mockEnv.DB.batch = async (stmts: any[]) => {
-        const runTransaction = db.transaction((s_list) => {
-            for(const s of s_list) {
-                db.prepare(s._sql).run(...(s._args || []))
-            }
-        })
-        runTransaction(stmts)
-    }
-
-    // Wrap in try-catch to prevent crashing main process
     try {
-        // Dynamic Config Fetch
-        const config = db.prepare("SELECT value FROM system_config WHERE key = 'odds_api_key'").get() as any
-        if (config && config.value) {
-            mockEnv.ODDS_API_KEY = config.value
-            // console.log('🔄 Using Dynamic Odds API Key:', config.value)
-        }
-
-        autoSettleBets(mockEnv).catch(e => console.error('[Cron Error Settle]', e))
-        updateSportsData(mockEnv).catch(e => console.error('[Cron Error Update]', e))
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupPath = path.join(BACKUP_DIR, `backup-${timestamp}.sqlite`);
+        
+        // better-sqlite3 has .backup() method
+        db.backup(backupPath)
+          .then(() => {
+              // console.log(`📦 Database Backup created: ${backupPath}`);
+          })
+          .catch(err => console.error('Backup failed:', err));
+          
     } catch (e) {
-        console.error('[Cron Sync Error]', e)
+        console.error('Backup error:', e);
     }
-}, 300000) // 5 minutes
+}, 60 * 60 * 1000); // Every 1 hour
+console.log('📦 Auto-Backup Scheduled (Hourly)');
+
+
+console.log('🛑 Auto-Settlement Disabled (Manual Mode)')
+
+// Start Bot (Running in separate process)
+startSupportBot(db).catch(e => console.error('Bot Init Error:', e));
+
+console.log('🔇 Settlement Watchdog Disabled')
 
 // Mock Cloudflare Bindings for Hono
 app.use('*', async (c, next) => {
@@ -139,23 +122,28 @@ app.use('*', async (c, next) => {
                          const sql = s._sql
                          const args = s._args || []
                          // console.log('[Batch Exec]', sql, args)
-                         const res = db.prepare(sql).run(...args)
-                         results.push({ meta: { last_row_id: res.lastInsertRowid, changes: res.changes } })
+                         try {
+                            const res = db.prepare(sql).run(...args)
+                            results.push({ meta: { last_row_id: res.lastInsertRowid, changes: res.changes } })
+                         } catch(stmtError) {
+                             console.error('[Batch Statement Error]', stmtError, '\nSQL:', sql, '\nArgs:', args)
+                             throw stmtError
+                         }
                      }
                  })
                  runTransaction(statements)
                  return results
              } catch (e) {
-                 console.error('[Batch Error]', e)
+                 console.error('[Batch Transaction Error]', e)
                  throw e
              }
         }
     },
     ODDS_API_KEY: process.env.ODDS_API_KEY || "244533-KG7TshXWJYPVVd",
-    JWT_SECRET: "dev-secret-key-stable",
-    VQPAY_APP_ID: "sp2017234877044363264m",
-    VQPAY_SECRET_PAY: "OBA7XU8JR8CX3CSYV1OBUWGAUE0TE8CS",
-    VQPAY_SECRET_SETTLE: "PHNPMM4HYBSFYBTB9EFOSDVBS1EE9GNS",
+    JWT_SECRET: process.env.JWT_SECRET || "dev-secret-key-stable",
+    VQPAY_APP_ID: process.env.VQPAY_APP_ID || "sp2017234877044363264m",
+    VQPAY_SECRET_PAY: process.env.VQPAY_SECRET_PAY || "OBA7XU8JR8CX3CSYV1OBUWGAUE0TE8CS",
+    VQPAY_SECRET_SETTLE: process.env.VQPAY_SECRET_SETTLE || "PHNPMM4HYBSFYBTB9EFOSDVBS1EE9GNS",
     VQPAY_API_URL: "https://api.vortaqpay.com"
   }
   await next()
@@ -163,6 +151,7 @@ app.use('*', async (c, next) => {
 
 // --- Middleware ---
 app.use('*', visitMiddleware)
+app.use(compress()) // Optimization: Enable Gzip Compression for all routes
 app.use('/*', cors())
 
 app.use(async (c, next) => {
@@ -184,20 +173,35 @@ app.route('/api/team', team)
 app.route('/api/sports', sports)
 app.route('/api/admin', admin)
 app.route('/api/vqpay', vqpay)
+app.route('/api/bot', bot) // Mount Bot Webhook
 
-// File Upload Shim (Memory/Disk)
+// --- OPTIMIZATION 2 & 3: Optimized Image Upload (File System) ---
+const UPLOAD_DIR = './public/uploads';
+try { mkdirSync(UPLOAD_DIR, { recursive: true }); } catch(e) {}
+
 app.post('/api/upload', async (c) => {
     try {
         const body = await c.req.parseBody()
         const file = body['file']
+        
         if (file instanceof File || (typeof file === 'object' && 'arrayBuffer' in file)) {
             // @ts-ignore
             const buffer = await file.arrayBuffer()
-            const base64 = Buffer.from(buffer).toString('base64')
-            const dataUrl = `data:image/png;base64,${base64}` // Simplification
+            const nodeBuffer = Buffer.from(buffer)
+            
+            // Generate filename
+            const ext = (file.name || 'image.png').split('.').pop() || 'png';
+            const filename = `img_${Date.now()}_${Math.floor(Math.random()*1000)}.${ext}`;
+            const filepath = path.join(UPLOAD_DIR, filename);
+            
+            // Save to Disk
+            writeFileSync(filepath, nodeBuffer);
+            
+            // Store PATH in DB (prefixed with 'fs:') to distinguish from legacy base64
+            const dbValue = `fs:${filename}`;
             
             const stmt = db.prepare('INSERT INTO images (user_id, type, data) VALUES (?, ?, ?)')
-            const res = stmt.run(null, 'upload', dataUrl)
+            const res = stmt.run(null, 'upload', dbValue)
             
             return c.json({ url: `/api/image/${res.lastInsertRowid}`, id: res.lastInsertRowid })
         }
@@ -213,19 +217,47 @@ app.get('/api/image/:id', (c) => {
     const img = db.prepare('SELECT data FROM images WHERE id = ?').get(id) as any
     if(!img) return c.notFound()
     
-    // Serve Base64 as image
-    const parts = img.data.split(',')
-    const buffer = Buffer.from(parts[1], 'base64')
-    
-    c.header('Content-Type', 'image/png')
-    return c.body(buffer)
+    // Check storage type
+    if (img.data.startsWith('fs:')) {
+        // File System
+        const filename = img.data.substring(3);
+        const filepath = path.join(UPLOAD_DIR, filename);
+        try {
+            const buffer = readFileSync(filepath);
+            // Guess mime
+            let mime = 'image/png';
+            if (filename.endsWith('.jpg') || filename.endsWith('.jpeg')) mime = 'image/jpeg';
+            if (filename.endsWith('.svg')) mime = 'image/svg+xml';
+            
+            c.header('Content-Type', mime)
+            c.header('Cache-Control', 'public, max-age=604800')
+            return c.body(buffer)
+        } catch(e) {
+            return c.notFound();
+        }
+    } else {
+        // Legacy Base64
+        const parts = img.data.split(',')
+        const buffer = Buffer.from(parts[1], 'base64')
+        c.header('Content-Type', 'image/png')
+        c.header('Cache-Control', 'public, max-age=604800') 
+        return c.body(buffer)
+    }
 })
 
 
 app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'node-sqlite' }))
 
 // --- Static Frontend Serving ---
-app.use('/*', serveStatic({ root: './dist' }))
+// Optimization: Cache static assets
+app.use('/*', serveStatic({ 
+    root: './dist',
+    onFound: (path, c) => {
+        if (path.endsWith('.js') || path.endsWith('.css') || path.endsWith('.png') || path.endsWith('.jpg')) {
+            c.header('Cache-Control', 'public, max-age=31536000') // 1 Year cache for hashed assets
+        }
+    }
+}))
 
 // SPA Fallback
 app.get('*', (c) => {
@@ -242,5 +274,6 @@ console.log(`🚀 Server running on port ${port}`)
 
 serve({
   fetch: app.fetch,
-  port
+  port,
+  hostname: '0.0.0.0'
 })

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { Clock, ChevronUp } from 'lucide-react'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -37,7 +37,7 @@ interface Props {
   selectedBets?: any[]
 }
 
-export default function SportAccordion({ matches, onBet, selectedBets = [] }: Props) {
+export default memo(function SportAccordion({ matches, onBet, selectedBets = [] }: Props) {
   const safeMatches = Array.isArray(matches) ? matches : []
   
   if (safeMatches.length === 0) return null
@@ -54,9 +54,9 @@ export default function SportAccordion({ matches, onBet, selectedBets = [] }: Pr
         ))}
     </div>
   )
-}
+})
 
-function MatchCard({ match, onBet, selectedBets = [] }: { match: Match, onBet: (m: Match, o: Outcome) => void, selectedBets: any[] }) {
+const MatchCard = memo(function MatchCard({ match, onBet, selectedBets = [] }: { match: Match, onBet: (m: Match, o: Outcome) => void, selectedBets: any[] }) {
     const [isExpanded, setIsExpanded] = useState(false)
     const outcomes = match.outcomes || []
     const markets = match.markets || {}
@@ -262,7 +262,7 @@ function MatchCard({ match, onBet, selectedBets = [] }: { match: Match, onBet: (
             )}
         </div>
     )
-}
+})
 
 function BetButton({ label, odds, onClick, compact, selected }: { label: string, odds: number, onClick: () => void, compact?: boolean, selected?: boolean }) {
     // Force Hide 1.01

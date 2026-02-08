@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, memo } from 'react'
 import api from '../utils/api'
 import { formatBRL } from '../utils/formatters'
 import ThermalTicket from '../components/ThermalTicket'
@@ -18,7 +18,7 @@ function formatBrazilDate(isoString: string) {
     return brazilTime;
 }
 
-// Generate next 7 days in Brazil Time
+// Generate next 7 days in Brazil Time (Fixed Window)
 function getNext7Days() {
     const today = new Date();
     // UTC-3 offset handling for day generation
@@ -45,15 +45,19 @@ export default function Dashboard() {
   const [amount, setAmount] = useState('')
   
   const [marketFilter, setMarketFilter] = useState('1x2')
-  const [selectedDate, setSelectedDate] = useState<string>(format(getNext7Days()[0], 'yyyy-MM-dd')) // Default today
-  
+  // Default to today
+  const [selectedDate, setSelectedDate] = useState<string>(format(getNext7Days()[0], 'yyyy-MM-dd'))
   const [ticketData, setTicketData] = useState<any>(null)
+  const [visibleLeagues, setVisibleLeagues] = useState(10) // Optimization: Lazy load leagues
+
+  const observerTarget = useRef<HTMLDivElement>(null)
+
   const [showTicket, setShowTicket] = useState(false)
   const navigate = useNavigate()
-  const { user } = useUser()
+  const { user, refreshUser } = useUser()
 
   // Helper to check auth and redirect
-  const checkAuth = (e?: any) => {
+  const checkAuth = useCallback((e?: any) => {
     if (!localStorage.getItem('token')) {
         e?.preventDefault()
         e?.stopPropagation()
@@ -61,7 +65,7 @@ export default function Dashboard() {
         return false
     }
     return true
-  }
+  }, [navigate])
 
   // Refs for Scroll Handling
   const marketScrollRef = useRef<HTMLDivElement>(null)
@@ -70,6 +74,11 @@ export default function Dashboard() {
   useEffect(() => {
     fetchEvents()
   }, [])
+
+  // Reset visible leagues when date changes
+  useEffect(() => {
+    setVisibleLeagues(10)
+  }, [selectedDate])
 
   const fetchEvents = async () => {
     try {
@@ -96,26 +105,25 @@ export default function Dashboard() {
     }
   }
 
-  // Filter Matches by Selected Date & Remove Locked Matches
+  // Fixed 7 Days Window (No infinite scroll)
+  const weekDays = useMemo(() => getNext7Days(), [])
+
+  // Filter Matches by Selected Date & Hide Expired
   const filteredMatches = useMemo(() => {
-      const now = new Date().getTime();
+      const now = Date.now();
       return allMatches.filter(match => {
-          // Date Filter
           const bzDate = formatBrazilDate(match.commence_time)
           const dateKey = format(bzDate, 'yyyy-MM-dd')
+          
           if (dateKey !== selectedDate) return false;
-
-          // Lock Filter (Hide ended/locked matches)
-          try {
-              const start = new Date(match.commence_time).getTime();
-              const diffMs = start - now;
-              const isLocked = diffMs < 45 * 60 * 1000; 
-              if (isLocked) return false;
-          } catch(e) {}
+          
+          // Hide matches that have already started (Expired)
+          if (new Date(match.commence_time).getTime() <= now) return false;
 
           return true;
       })
   }, [allMatches, selectedDate])
+
 
   // Group by League
   const matchesByLeague = useMemo(() => {
@@ -139,6 +147,28 @@ export default function Dashboard() {
       return Object.values(groups).sort((a: any, b: any) => b.rank - a.rank);
   }, [filteredMatches]);
 
+  // Infinite Scroll Observer for performance
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting) {
+          setVisibleLeagues(prev => prev + 10)
+        }
+      },
+      { threshold: 0.1 }
+    )
+
+    if (observerTarget.current) {
+      observer.observe(observerTarget.current)
+    }
+
+    return () => {
+      if (observerTarget.current) {
+        observer.unobserve(observerTarget.current)
+      }
+    }
+  }, [matchesByLeague])
+
   // --- Scroll Helpers ---
   const handleDateClick = (dateStr: string, index: number) => {
       setSelectedDate(dateStr)
@@ -157,7 +187,7 @@ export default function Dashboard() {
       }
   }
 
-  const toggleBet = (event: any, outcome: any) => {
+  const toggleBet = useCallback((event: any, outcome: any) => {
       // Auth Check
       if (!checkAuth()) return;
 
@@ -190,15 +220,15 @@ export default function Dashboard() {
       }
       
       if (betSlip.length === 0) setIsSlipOpen(true);
-  }
+  }, [betSlip, checkAuth])
 
   const removeBet = (index: number) => {
       setBetSlip(prev => prev.filter((_, i) => i !== index));
   }
 
   const confirmBet = async () => {
-    if (!amount || isNaN(Number(amount)) || Number(amount) < 1) {
-      toast.error('Valor inválido')
+    if (!amount || isNaN(Number(amount)) || Number(amount) < 10) {
+      toast.error('Aposta mínima R$ 10.00')
       return
     }
     
@@ -222,6 +252,7 @@ export default function Dashboard() {
       setBetSlip([])
       setAmount('')
       setIsSlipOpen(false)
+      refreshUser() // Update balance
     } catch (e: any) {
       const errorMsg = e.response?.data?.error || 'Falha ao apostar';
       
@@ -236,7 +267,6 @@ export default function Dashboard() {
 
   const totalOdds = betSlip.reduce((acc, bet) => acc * bet.odds, 1);
   const potentialReturn = amount ? (Number(amount) * totalOdds).toFixed(2) : '0.00';
-  const weekDays = getNext7Days();
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-20 text-textMuted">
@@ -273,7 +303,7 @@ export default function Dashboard() {
                   const isSelected = selectedDate === dateStr
                   const displayDay = format(date, 'dd/MM')
                   // Portuguese Weekdays: Dom, Seg, Ter, Qua, Qui, Sex, Sáb
-                  const displayWeek = idx === 0 ? 'HOJE' : format(date, 'EEE', { locale: ptBR }).replace('.', '').toUpperCase()
+                  const displayWeek = format(date, 'EEE', { locale: ptBR }).replace('.', '').toUpperCase()
                   
                   return (
                       <button
@@ -299,7 +329,7 @@ export default function Dashboard() {
 
       {/* Flat Match List -> Grouped List */}
       <div className="space-y-4 px-4">
-          {matchesByLeague.map((group, index) => (
+          {matchesByLeague.slice(0, visibleLeagues).map((group, index) => (
               <LeagueAccordion 
                   key={group.id} 
                   league={group} 
@@ -308,6 +338,11 @@ export default function Dashboard() {
                   defaultOpen={index === 0} 
               />
           ))}
+          {visibleLeagues < matchesByLeague.length && (
+             <div ref={observerTarget} className="h-10 flex items-center justify-center text-textMuted text-xs">
+                Carregando mais jogos...
+             </div>
+          )}
       </div>
 
       {/* Persistent Bet Slip Floating Bar */}
@@ -401,7 +436,7 @@ export default function Dashboard() {
   )
 }
 
-function LeagueAccordion({ league, onBet, selectedBets, defaultOpen = false }: { league: any, onBet: any, selectedBets: any[], defaultOpen?: boolean }) {
+const LeagueAccordion = memo(function LeagueAccordion({ league, onBet, selectedBets, defaultOpen = false }: { league: any, onBet: any, selectedBets: any[], defaultOpen?: boolean }) {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     return (
@@ -433,4 +468,4 @@ function LeagueAccordion({ league, onBet, selectedBets, defaultOpen = false }: {
             )}
         </div>
     )
-}
+})

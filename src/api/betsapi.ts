@@ -35,42 +35,14 @@ export interface DetailedMatch {
     markets: Record<string, NormalizedMarket> // keyed by type '1x2', 'ou', 'dc', etc.
 }
 
-// Helper: Generate Dummy Events for Testing/Fallback
+// Helper: Generate Dummy Events - REMOVED PER USER REQUEST
 function getDummyEvents(): BetsApiEvent[] {
-    const now = Math.floor(Date.now() / 1000)
-    const events: BetsApiEvent[] = []
-    
-    const leagues = [
-        { id: 'fake_1', name: 'Premier League (Demo)', cc: 'en' },
-        { id: 'fake_2', name: 'La Liga (Demo)', cc: 'es' },
-        { id: 'fake_3', name: 'Brasileirão (Demo)', cc: 'br' }
-    ]
-    
-    const teams = [
-        ['Arsenal', 'Liverpool'], ['Man City', 'Chelsea'], ['Barcelona', 'Real Madrid'],
-        ['Flamengo', 'Palmeiras'], ['Juventus', 'Milan'], ['Bayern', 'Dortmund']
-    ]
-
-    teams.forEach((pair, i) => {
-        events.push({
-            id: `dummy_event_${i}_${now}`,
-            sport_id: '1',
-            time: (now + 3600 + (i * 7200)).toString(), // Starts in 1h, 3h, etc.
-            league: leagues[i % leagues.length],
-            home: { id: `h_${i}`, name: pair[0] },
-            away: { id: `a_${i}`, name: pair[1] }
-        })
-    })
-    
-    console.log('[BetsAPI] Generated dummy events for testing.')
-    return events
+    return []
 }
 
 // Fetch Upcoming Events (Smart Pagination for Next 7 Days)
 export async function getUpcomingEvents(apiKey: string): Promise<BetsApiEvent[]> {
     try {
-        // if (!apiKey) return [] // Removed to allow dummy fallback
-        
         let allEvents: BetsApiEvent[] = []
         
         // Randomize User Agent to avoid detection
@@ -92,7 +64,15 @@ export async function getUpcomingEvents(apiKey: string): Promise<BetsApiEvent[]>
                         return { success: false, error: 'RATE_LIMIT', reset: resetTime };
                     }
 
-                    if(res.ok) return await res.json();
+                    if(res.ok) {
+                        const text = await res.text();
+                        try {
+                            return JSON.parse(text);
+                        } catch (e) {
+                            console.error('[BetsAPI] JSON Parse Error (HTML response?):', text.substring(0, 100));
+                            return { success: false, error: 'INVALID_JSON' };
+                        }
+                    }
                 } catch(e) {
                     await new Promise(r => setTimeout(r, 1000 * (i+1))); // Exponential backoff
                 }
@@ -102,20 +82,15 @@ export async function getUpcomingEvents(apiKey: string): Promise<BetsApiEvent[]>
         
         // 1. Fetch First Page to get Total Pages
         console.log('[BetsAPI] Fetching page 1 to determine total size (Using Bet365 Source)...')
+        // Using ENV KEY is handled by the caller or global config? The caller passes 'apiKey'.
+        // Ensuring we log if key is empty
+        if(!apiKey || apiKey.length < 5) console.warn('[BetsAPI] Warning: API Key looks invalid:', apiKey)
+
         const firstData = await fetchWithRetry(`${BASE_URL}/bet365/upcoming?sport_id=1&token=${apiKey}&page=1`)
         
-        // Handle Rate Limit specifically
-
-        if (firstData.error === 'RATE_LIMIT') {
-             console.error('[BetsAPI] Quota exhausted. Switching to fallback/cache mode.');
-             return getDummyEvents(); // Fallback to dummy so user sees SOMETHING
-        }
-
         if (!firstData.success || !firstData.pager) {
-            console.error('[BetsAPI] Failed to fetch first page or no pager info. Status:', firstData.success, 'Raw:', JSON.stringify(firstData).slice(0, 200))
-            // Only use dummy if explicitly requested or strict dev mode, but for now we want REAL data.
-            // Returning empty list to trigger cache protection instead of fake data
-            return [] 
+            console.error('[BetsAPI] Failed to fetch first page. Status:', firstData.success)
+            return [] // Return empty to indicate failure, NO FAKE DATA
         }
 
         const totalItems = firstData.pager.total
@@ -129,8 +104,8 @@ export async function getUpcomingEvents(apiKey: string): Promise<BetsApiEvent[]>
 
         console.log(`[BetsAPI] Found ${totalItems} total events across ${totalPages} pages. Starting bulk fetch...`)
 
-        // 2. Fetch Remaining Pages (Max 50 pages = 2500 events) - Reduced to prevent rate limit
-        const MAX_PAGES = Math.min(totalPages, 50); 
+        // 2. Fetch Remaining Pages (Max 10 pages to save API calls)
+        const MAX_PAGES = Math.min(totalPages, 10); 
         const pendingPages = []
         for(let i=2; i<=MAX_PAGES; i++) pendingPages.push(i)
 
@@ -151,25 +126,9 @@ export async function getUpcomingEvents(apiKey: string): Promise<BetsApiEvent[]>
             batchResults.forEach(list => allEvents.push(...list))
             
             // Delay between batches to respect rate limit
-            // 5 requests + 1s delay.
             await new Promise(r => setTimeout(r, 1000));
         }
 
-        // Parallel Batch 2: TARGETED LEAGUES (To ensure future coverage)
-        // Also rate limited
-        const targetLeagues = ['8', '564', '384', '82', '301', '2', '5', '466', '377', '3237', '188', '203', '34']; 
-        
-        console.log('[BetsAPI] Fetching targeted leagues (Bet365 Source)...');
-        for (const leagueId of targetLeagues) {
-             try {
-                const data = await fetchWithRetry(`${BASE_URL}/bet365/upcoming?sport_id=1&token=${apiKey}&league_id=${leagueId}`, 2)
-                if (data.success && Array.isArray(data.results)) {
-                    allEvents.push(...data.results)
-                }
-                await new Promise(r => setTimeout(r, 500)); // 0.5s delay per league
-            } catch(e) {}
-        }
-        
         // 3. Time Filter (Strict 7 Days Window)
         const now = Math.floor(Date.now() / 1000)
         const eightDaysLater = now + (8 * 24 * 60 * 60)
@@ -196,9 +155,22 @@ export async function getEventOdds(eventId: string, apiKey: string): Promise<any
     try {
         const headers = { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' };
         const res = await fetch(`${BASE_URL}/bet365/prematch?token=${apiKey}&event_id=${eventId}`, { headers })
-        const data = await res.json()
-        if (data.success && Array.isArray(data.results) && data.results.length > 0) {
-            return data.results[0]
+        
+        if (!res.ok) {
+            if (res.status === 429) console.warn(`[BetsAPI] Odds Rate Limit (429) for ${eventId}`);
+            return null;
+        }
+
+        const text = await res.text();
+        try {
+            const data = JSON.parse(text);
+            if (data.success && Array.isArray(data.results) && data.results.length > 0) {
+                return data.results[0]
+            }
+        } catch (e) {
+            // Silent fail for invalid JSON (HTML error pages) to keep logs clean
+            // console.error(`[BetsAPI] Odds JSON Error ${eventId}:`, text.substring(0, 50));
+            return null;
         }
         return null
     } catch (e) {
@@ -212,9 +184,18 @@ export async function getMatchResult(eventId: string, apiKey: string): Promise<a
     try {
         const headers = { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' };
         const res = await fetch(`${BASE_URL}/event/view?token=${apiKey}&event_id=${eventId}`, { headers })
-        const data = await res.json()
-        if (data.success && Array.isArray(data.results) && data.results.length > 0) {
-            return data.results[0]
+        
+        if (!res.ok) return null;
+
+        const text = await res.text();
+        try {
+            const data = JSON.parse(text);
+            if (data.success && Array.isArray(data.results) && data.results.length > 0) {
+                return data.results[0]
+            }
+        } catch (e) {
+            // console.error(`[BetsAPI] Result JSON Error ${eventId}`, text.substring(0, 50));
+            return null;
         }
         return null
     } catch (e) {

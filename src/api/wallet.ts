@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { Bindings } from '../bindings'
 import { authMiddleware } from '../middleware'
+import { sendTgMessage } from '../utils/telegram' // Import Telegram Utility
 
 const wallet = new Hono<{ Bindings: Bindings, Variables: { user: any } }>()
 
@@ -113,6 +114,31 @@ wallet.post('/deposit', async (c) => {
       VALUES (?, 'deposit', ?, ?, 'pending', ?, ?)
     `).bind(userId, amount, usdtAmount, `Deposit USDT-TRC20`, proof_id || null).run()
     
+    // User Notification: Submitted
+    const uInfo = await c.env.DB.prepare("SELECT uid, email, parent_id FROM users WHERE id = ?").bind(userId).first<any>()
+    if(uInfo) {
+        await c.env.DB.prepare("INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)").bind(uInfo.uid, 'Depósito Enviado', `Seu depósito de R$ ${Number(amount).toFixed(2)} foi enviado e está em análise.`).run()
+    }
+
+    // TG Notify (Admin + Upline)
+    try {
+        // Admin
+        await sendTgMessage(
+            `💰 <b>新充值 (USDT)</b>\n\n` +
+            `👤 UID: <code>${uInfo?.uid || userId}</code>\n` +
+            `📧 邮箱: ${uInfo?.email}\n` +
+            `💵 金额: <b>R$ ${amount.toFixed(2)}</b>\n` +
+            `🔹 USDT: ${usdtAmount.toFixed(2)}`
+        )
+
+        // Upline Notification (New Deposit Pending)
+        // Note: Usually we notify on approval (money received), but if requested, we can notify on submission too.
+        // Given the prompt "All notifications", let's focus on Approval notifications which are already handled in admin.ts.
+        // Notifying upline on "Pending" deposit might be spammy if user cancels or fails.
+        // I will stick to Approval notifications in admin.ts which I already fixed.
+        // So no changes needed here for Upline.
+    } catch(e) {}
+
     return c.json({ success: true, id: res.meta.last_row_id })
   } catch (e) {
     return c.json({ error: 'Failed' }, 500)
@@ -142,8 +168,12 @@ wallet.post('/withdraw', async (c) => {
   }
 
   try {
-    // Deduct balance IMMEDIATELY (Hold funds)
-    await c.env.DB.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').bind(amount, userId).run()
+    // Deduct balance IMMEDIATELY (Atomic Update to prevent Race Condition)
+    const updateRes = await c.env.DB.prepare('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?').bind(amount, userId, amount).run()
+    
+    if (updateRes.meta.changes === 0) {
+        return c.json({ error: 'Saldo insuficiente ou erro de concorrência' }, 400)
+    }
 
     // Create transaction
     await c.env.DB.prepare(`
@@ -151,6 +181,29 @@ wallet.post('/withdraw', async (c) => {
       VALUES (?, 'withdraw', ?, ?, 'pending', ?, ?)
     `).bind(userId, amount, usdtAmount, `To: ${user.usdt_address}`, user.usdt_address).run()
     
+    // User Notification: Submitted
+    const uInfo = await c.env.DB.prepare("SELECT uid, email FROM users WHERE id = ?").bind(userId).first<any>()
+    if(uInfo) {
+        await c.env.DB.prepare("INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)").bind(uInfo.uid, 'Saque Solicitado', `Sua solicitação de saque de R$ ${Number(amount).toFixed(2)} foi recebida e está aguardando aprovação.`).run()
+    }
+    
+    // TG Notify
+    try {
+        const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+        const ua = c.req.header('user-agent') || 'Unknown Device'
+        const uInfo = await c.env.DB.prepare("SELECT uid, email FROM users WHERE id = ?").bind(userId).first<any>()
+        await sendTgMessage(
+            `💸 <b>提现申请 (WITHDRAW)</b>\n\n` +
+            `👤 UID: <code>${uInfo?.uid || userId}</code>\n` +
+            `📧 邮箱: ${uInfo?.email}\n` +
+            `💵 金额: <b>R$ ${Number(amount).toFixed(2)}</b>\n` +
+            `🔹 USDT: ${usdtAmount.toFixed(2)}\n` +
+            `🏦 地址: <code>${user.usdt_address}</code>\n` +
+            `🌍 IP: ${ip}\n` +
+            `📱 设备: ${ua}`
+        )
+    } catch(e) {}
+
     return c.json({ success: true })
   } catch (e) {
     return c.json({ error: 'Failed' }, 500)

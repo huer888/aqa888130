@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { Bindings } from '../bindings'
 import { authMiddleware } from '../middleware'
 import { hash, compare } from 'bcryptjs'
+import { sendTgMessage } from '../utils/telegram' // Import Telegram Utility
 
 const userApi = new Hono<{ Bindings: Bindings, Variables: { user: any } }>()
 
@@ -63,6 +64,23 @@ userApi.post('/kyc', async (c) => {
     SET kyc_status = 'pending', real_name = ?, cpf = ?, kyc_image_front = ?, kyc_image_back = ? 
     WHERE id = ?
   `).bind(name, cpf, front, back, userId).run()
+  
+  // TG Notify
+  try {
+      const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+      const ua = c.req.header('user-agent') || 'Unknown Device'
+      const uInfo = await c.env.DB.prepare("SELECT uid, email FROM users WHERE id = ?").bind(userId).first<any>()
+      
+      await sendTgMessage(
+        `🪪 <b>KYC 待审核</b>\n\n` +
+        `👤 UID: <code>${uInfo?.uid || userId}</code>\n` +
+        `📧 邮箱: ${uInfo?.email}\n` +
+        `📝 姓名: ${name}\n` +
+        `🔢 CPF: ${cpf}\n` +
+        `🌍 IP: ${ip}\n` +
+        `📱 设备: ${ua}`
+      )
+  } catch(e) {}
   
   return c.json({ success: true, status: 'pending' })
 })
@@ -130,6 +148,26 @@ userApi.delete('/notifications', async (c) => {
     const user = await c.env.DB.prepare('SELECT uid FROM users WHERE id = ?').bind(userId).first<any>()
     await c.env.DB.prepare('DELETE FROM notifications WHERE target_uid = ?').bind(user.uid).run()
     return c.json({ success: true })
+})
+
+// Generate Bot Bind Code
+userApi.get('/bind-code', async (c) => {
+    const userId = c.get('user').id
+    
+    // Create Code
+    const code = Math.floor(100000 + Math.random() * 900000).toString()
+    const expiresAt = Date.now() + 10 * 60 * 1000 // 10 minutes
+    
+    // Clean old codes
+    await c.env.DB.prepare("DELETE FROM bind_codes WHERE user_id = ?").bind(userId).run()
+    
+    // Insert new code
+    await c.env.DB.prepare("INSERT INTO bind_codes (code, user_id, expires_at) VALUES (?, ?, ?)").bind(code, userId, expiresAt).run()
+    
+    // Check if already bound
+    const user = await c.env.DB.prepare("SELECT telegram_username FROM users WHERE id = ?").bind(userId).first<any>()
+    
+    return c.json({ code, expiresAt, current_bot: user?.telegram_username })
 })
 
 export default userApi

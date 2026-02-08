@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 export default function Team() {
   const [stats, setStats] = useState({ member_count: 0, self_rebate: 0, team_override: 0, total_commission: 0 })
   const [inviteRate, setInviteRate] = useState(0.05) // 5%
+  const [inputRate, setInputRate] = useState('5') // For manual input
   const [inviteLink, setInviteLink] = useState('')
   const [inviteCode, setInviteCode] = useState('')
   const [maxRate, setMaxRate] = useState(0.07) // Default max
@@ -38,13 +39,14 @@ export default function Team() {
               
               setInviteCode(code)
               
-              // Set default slider: 2% gap if possible
-              let initial = 0.05
-              if (userMax <= 0.05) initial = Math.max(0.01, userMax - 0.01)
-              setInviteRate(initial)
+              // Set default slider: Always 1% gap (User Rate - 1%)
+              // Ensure it's at least 1%
+              const defaultSubRate = Math.max(0.01, userMax - 0.01)
+              setInviteRate(defaultSubRate)
+              setInputRate((defaultSubRate * 100).toFixed(0))
               
               // Initial link generation
-              setInviteLink(`${window.location.origin}/register?ref=${code}&rate=${initial}`)
+              setInviteLink(`${window.location.origin}/register?ref=${code}&rate=${defaultSubRate}`)
           }
       } catch (e) {}
   }
@@ -56,6 +58,22 @@ export default function Team() {
      }
   }, [inviteRate, inviteCode])
 
+  const handleRateBlur = () => {
+      let val = parseFloat(inputRate) / 100
+      if (isNaN(val)) val = 0.01
+      
+      // Force 1% gap
+      const maxAllowed = Math.max(0.01, maxRate - 0.01)
+      if (val > maxAllowed) {
+          val = maxAllowed
+          toast.warning(`Taxa máxima permitida: ${(maxAllowed * 100).toFixed(0)}% (Você deve manter 1% de lucro)`)
+      }
+      if (val < 0.01) val = 0.01
+      
+      setInviteRate(val)
+      setInputRate((val * 100).toFixed(0))
+  }
+
   const copyLink = () => {
     navigator.clipboard.writeText(inviteLink)
     toast.success('Link copiado!')
@@ -66,10 +84,18 @@ export default function Team() {
     toast.success('Código copiado!')
   }
 
-  // Calculate percentage for display (e.g. 0.05 -> 5%)
-  const ratePercent = Math.round(inviteRate * 100)
-  const maxPercent = Math.round(Math.max(1, (maxRate - 0.01) * 100))
-  const profitPercent = Math.round((maxRate - inviteRate) * 100)
+  // Calculate percentage for display
+  // Use inputRate for immediate feedback, fallback to inviteRate
+  const inputValue = parseFloat(inputRate)
+  const displayRate = isNaN(inputValue) ? 0 : inputValue
+  
+  // Calculate Max Limit (e.g. 7% -> Max 6%)
+  // Ensure we compare apples to apples (percentages)
+  const userMaxPercent = Math.round(maxRate * 100)
+  const maxAllowedPercent = Math.max(1, userMaxPercent - 1)
+  
+  // Calculate Profit (User Max - Current Setting)
+  const profitPercent = Math.max(0, userMaxPercent - displayRate)
 
   return (
     <div className="space-y-6">
@@ -112,24 +138,26 @@ export default function Team() {
          
          <div className="mb-8">
            <div className="flex justify-between items-end mb-4">
-             <label className="text-xs font-bold text-textMuted uppercase">Comissão do Sub-agente</label>
-             <span className="font-bold text-2xl text-primary">{ratePercent}%</span>
+             <label className="text-xs font-bold text-textMuted uppercase">Comissão do Sub-agente (%)</label>
+             <span className="font-bold text-2xl text-primary">{displayRate}%</span>
            </div>
            
-           <input 
-             type="range" 
-             min="0.01" 
-             max={Math.max(0.01, maxRate - 0.01)} 
-             step="0.01"
-             value={inviteRate}
-             onChange={e => setInviteRate(parseFloat(e.target.value))}
-             className="w-full h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary hover:accent-primaryHover"
-           />
+           <div className="flex gap-4 items-center">
+               <input 
+                 type="number"
+                 value={inputRate}
+                 onChange={e => setInputRate(e.target.value)}
+                 onBlur={handleRateBlur}
+                 className="flex-1 bg-secondary border border-gray-700 rounded-lg p-3 text-white font-bold text-center focus:border-primary outline-none"
+                 placeholder="Ex: 5"
+               />
+               <span className="text-gray-500 font-bold">%</span>
+           </div>
            
            <div className="flex justify-between text-[10px] text-gray-500 mt-2 font-mono">
              <span>1% (Mínimo)</span>
              <span className="text-white bg-gray-700 px-2 py-0.5 rounded">Seu Lucro: <span className="text-green-400">{profitPercent}%</span></span>
-             <span>{maxPercent}% (Máximo)</span>
+             <span>{maxAllowedPercent}% (Máximo)</span>
            </div>
          </div>
 

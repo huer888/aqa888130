@@ -5,6 +5,7 @@ import api from '../utils/api'
 import KycModal from '../components/KycModal'
 import SecurityCenter from '../components/SecurityCenter'
 import SupportModal from '../components/SupportModal'
+import BotBindModal from '../components/BotBindModal'
 import { useUser } from '../context/UserContext'
 import { toast } from 'sonner'
 
@@ -13,6 +14,7 @@ export default function Profile() {
   const [showKyc, setShowKyc] = useState(false)
   const [showSecurity, setShowSecurity] = useState<'password' | 'pin' | null>(null)
   const [showSupport, setShowSupport] = useState(false)
+  const [showBotBind, setShowBotBind] = useState(false)
   const [totalCommission, setTotalCommission] = useState(0) // Add total commission
   const [config, setConfig] = useState<any>({})
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
@@ -130,18 +132,19 @@ export default function Profile() {
 
          {/* Balance Cards for Profile */}
          <div className="grid grid-cols-2 gap-3 min-h-[5rem]">
-             <div className="bg-surface p-4 rounded-xl border border-gray-800 shadow-sm">
-                 <div className="text-xs text-textMuted uppercase font-bold mb-1">Saldo Total</div>
-                 <div className="text-xl font-bold text-white flex items-center gap-2">
-                     R$ {Number(user.balance || 0).toFixed(2)}
+             <div className="col-span-2 bg-surface p-6 rounded-xl border border-gray-800 shadow-sm flex items-center justify-between">
+                 <div>
+                     <div className="text-xs text-textMuted uppercase font-bold mb-1">Saldo Total Disponível</div>
+                     <div className="text-3xl font-black text-white flex items-center gap-2">
+                         R$ {Number(user.balance || 0).toFixed(2)}
+                     </div>
+                 </div>
+                 <div className="bg-primary/10 p-3 rounded-full text-primary">
+                     <Wallet size={32} />
                  </div>
              </div>
-             <div className="bg-surface p-4 rounded-xl border border-gray-800 shadow-sm">
-                 <div className="text-xs text-textMuted uppercase font-bold mb-1">Bônus</div>
-                 <div className="text-xl font-bold text-yellow-400 flex items-center gap-2">
-                     R$ {Number(user.bonus || 0).toFixed(2)}
-                 </div>
-             </div>
+             {/* Bonus Card Removed per request */}
+             <div className="hidden"></div>
          </div>
          </>
       )}
@@ -169,7 +172,7 @@ export default function Profile() {
                     user.kyc_status === 'pending' ? 'text-yellow-400' :
                     'text-red-400'
                 }`}>
-                    {user.kyc_status === 'verified' ? 'Identidade Verificada' : user.kyc_status === 'rejected' ? 'Verificação Recusada' : 'Verificar e Ganhar R$20'}
+                    {user.kyc_status === 'verified' ? 'Identidade Verificada' : user.kyc_status === 'rejected' ? 'Verificação Recusada' : 'Verificar e Ganhar R$8.88'}
                 </div>
                 <div className={`text-[10px] uppercase font-bold tracking-wider ${
                     user.kyc_status === 'verified' ? 'text-green-300/70' :
@@ -215,6 +218,25 @@ export default function Profile() {
           />
       )}
 
+      {/* Bot Binding Modal */}
+      <BotBindModal 
+        isOpen={showBotBind} 
+        onClose={() => setShowBotBind(false)} 
+      />
+
+      <div className="rounded-xl overflow-hidden shadow-lg border border-gray-800 bg-surface mb-6">
+        <button onClick={() => setShowBotBind(true)} className="w-full flex items-center p-4 hover:bg-surfaceHover transition text-left group">
+            <div className="p-2 rounded-lg mr-4 bg-purple-500/10 text-purple-500">
+                <Headset size={20} />
+            </div>
+            <div className="flex-1">
+                <div className="font-medium text-sm text-white">Bot Telegram (Relatórios)</div>
+                <div className="text-xs text-textMuted mt-0.5">Vincule ao grupo para notificações</div>
+            </div>
+            <ChevronRight size={16} className="text-gray-600 group-hover:text-white transition-colors" />
+        </button>
+      </div>
+
       <div className="rounded-xl overflow-hidden shadow-lg border border-gray-800">
         <MenuLink 
            icon={Ticket} 
@@ -246,8 +268,11 @@ export default function Profile() {
         <MenuLink 
            icon={Headset} 
            title="Suporte Online" 
-           subtitle="Telegram / WhatsApp"
-           onClick={() => setShowSupport(true)}
+           subtitle="Fale Conosco Agora"
+           onClick={() => {
+               if(config.support_tg) window.open(config.support_tg, '_blank');
+               else setShowSupport(true);
+           }}
         />
       </div>
 

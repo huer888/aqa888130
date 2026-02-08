@@ -98,14 +98,27 @@ export default function MyBets() {
           <ThermalTicket 
             isOpen={!!selectedBet} 
             onClose={() => setSelectedBet(null)} 
-            data={{
-                ticketId: selectedBet.ticket_id,
-                matchInfo: selectedBet.matchInfo,
-                selection: selectedBet.selection,
-                odds: selectedBet.odds,
-                amount: selectedBet.amount,
-                potentialPayout: selectedBet.potential_payout
-            }} 
+            data={
+                selectedBet.match_id === 'parlay' || selectedBet.matchInfo?.type === 'parlay' 
+                ? {
+                    ticketId: selectedBet.ticket_id,
+                    amount: selectedBet.amount,
+                    potentialPayout: selectedBet.potential_payout,
+                    items: selectedBet.matchInfo?.legs ? selectedBet.matchInfo.legs.map((leg: any) => ({
+                        matchInfo: leg.matchInfo, // Full object {home, away, date} (now saved by backend)
+                        selection: leg.selection,
+                        odds: leg.odds
+                    })) : []
+                }
+                : {
+                    ticketId: selectedBet.ticket_id,
+                    matchInfo: selectedBet.matchInfo,
+                    selection: selectedBet.selection,
+                    odds: selectedBet.odds,
+                    amount: selectedBet.amount,
+                    potentialPayout: selectedBet.potential_payout
+                }
+            } 
           />
       )}
     </div>

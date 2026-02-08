@@ -143,7 +143,7 @@ export default function Wallet() {
     try {
       // 1. Update Address first (using the PIN provided for withdrawal)
       if (withdrawAddress && withdrawAddress !== walletInfo?.usdt_address) {
-          await api.post('/wallet/setup', { pin, address: withdrawAddress })
+          await api.post('/wallet/methods', { type: 'usdt', value: withdrawAddress })
       }
 
       // 2. Submit Withdraw
@@ -199,6 +199,14 @@ export default function Wallet() {
       } finally {
           setProcessing(false)
       }
+  }
+
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text).then(() => {
+          toast.success('Copiado!')
+      }).catch(() => {
+          toast.error('Falha ao copiar')
+      })
   }
 
   if (loading) return <div className="p-8 text-center text-textMuted">Carregando carteira...</div>
