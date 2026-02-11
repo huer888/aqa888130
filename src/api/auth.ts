@@ -1,8 +1,13 @@
+
 import { Hono } from 'hono'
 import { sign } from 'hono/jwt'
 import { hash, compare } from 'bcryptjs'
 import { Bindings } from '../bindings'
 import { Resend } from 'resend'
+import { sendTgMessage } from '../utils/telegram' // Import Telegram Utility
+import { BOT_TOKEN } from '../config'
+import { getTemplate } from '../utils/templates'
+import { notifyAction } from '../utils/notifier' // Import Notifier
 
 const auth = new Hono<{ Bindings: Bindings }>()
 
@@ -14,24 +19,7 @@ async function getConfig(db: D1Database, key: string) {
 
 // Register
 auth.post('/register', async (c) => {
-  const { email, password, name, code, inviteCode, rate } = await c.req.json()
-
-  // Verify Code
-  let isValid = false
-  if (code === '889988') {
-      isValid = true
-  } else {
-      const stored = await c.env.DB.prepare('SELECT code, expires_at FROM verification_codes WHERE email = ?').bind(email).first<any>()
-      if (stored && stored.code === code && stored.expires_at > Date.now()) {
-          isValid = true
-          // Consume code
-          await c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run()
-      }
-  }
-
-  if (!isValid) {
-      return c.json({ error: 'Código de verificação inválido ou expirado' }, 400)
-  }
+  const { email, password, name, inviteCode, rate } = await c.req.json()
 
   // Force Invite Code Check
   if (!inviteCode) {
@@ -48,23 +36,27 @@ auth.post('/register', async (c) => {
   let parentId = null
   let commissionRate = 0.05 
   
-  const parent = await c.env.DB.prepare('SELECT id, commission_rate FROM users WHERE invite_code = ? OR id = ?').bind(inviteCode, inviteCode).first<any>()
+  const parent = await c.env.DB.prepare('SELECT id, commission_rate, invite_code FROM users WHERE invite_code = ? OR id = ?').bind(inviteCode, inviteCode).first<any>()
   if (!parent) {
       return c.json({ error: 'Código de convite inválido' }, 400)
   }
   
   parentId = parent.id
   
+  // Special Rule: If parent is Master Account (888888), max rate is 5%
+  const maxRate = parent.invite_code === '888888' ? 0.05 : parent.commission_rate
+
   if (rate) {
         const requestedRate = parseFloat(rate)
-        if (requestedRate <= parent.commission_rate && requestedRate > 0) {
+        if (requestedRate <= maxRate && requestedRate > 0) {
             commissionRate = requestedRate
         } else {
-            commissionRate = parent.commission_rate - 0.01 
-            if(commissionRate < 0.01) commissionRate = 0.01
+            // If requested is too high, give max possible or calculate standard step down
+            commissionRate = maxRate
         }
   } else {
-        commissionRate = 0.05
+        // Default assignment
+        commissionRate = parent.invite_code === '888888' ? 0.05 : 0.05
   }
 
   // Hash Password
@@ -74,25 +66,92 @@ auth.post('/register', async (c) => {
   const uid = Math.floor(10000000 + Math.random() * 90000000).toString()
   const newInviteCode = Math.floor(100000 + Math.random() * 900000).toString()
 
-  // Insert User
-  try {
-    const result = await c.env.DB.prepare(`
-      INSERT INTO users (email, password, name, parent_id, commission_rate, uid, invite_code, balance)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `).bind(email, passwordHash, name || email.split('@')[0], parentId, commissionRate, uid, newInviteCode).run()
+    // Insert User
+    try {
+        const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+        
+        const result = await c.env.DB.prepare(`
+        INSERT INTO users (email, password, name, parent_id, commission_rate, uid, invite_code, balance, ip_address, last_login_ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        `).bind(email, passwordHash, name || email.split('@')[0], parentId, commissionRate, uid, newInviteCode, ip, ip).run()
 
     if (!result.success) throw new Error('Database insert failed')
     
     // *** NEW: Send Welcome Notification ***
     const welcomeMsg = await getConfig(c.env.DB, 'welcome_message')
-    if (welcomeMsg) {
-        await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(uid, 'Bem-vindo!', welcomeMsg).run()
-    } else {
-        // Default message
-        await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(uid, 'Bem-vindo ao Stake.BR', 'Comece a apostar agora e ganhe comissões!').run()
-    }
+    const welcomeTitle = 'Bem-vindo ao Stake.BR'
+    const welcomeBody = welcomeMsg || 'Comece a apostar agora e ganhe comissões!'
+    
+    // Check if notification already sent to avoid duplicate on re-run (though unlikely with unique uid)
+    await c.env.DB.prepare('INSERT INTO notifications (target_uid, title, message) VALUES (?, ?, ?)').bind(uid, welcomeTitle, welcomeBody).run()
 
-    return c.json({ success: true, message: 'Registrado com sucesso' })
+    // *** Auto Login: Generate Token ***
+    
+        // Telegram Notify (Admin Channel)
+        try {
+            const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+            const ua = c.req.header('user-agent') || 'Unknown Device'
+            
+            // Send simple admin notify (Chinese for internal team)
+            await sendTgMessage(
+                `👤 <b>新用户注册 (NEW USER)</b>\n\n` +
+                `📧 邮箱: ${email}\n` +
+                `🆔 UID: <code>${uid}</code>\n` +
+                `🌍 IP: ${ip}\n` +
+                `📱 设备: ${ua}`
+            )
+        } catch(err) { console.error('TG Notify Error', err) }
+
+
+        // Telegram Notify (Upline Agent Group)
+        if (parent) {
+            const botToken = BOT_TOKEN;
+            // Get parent info (need TG details)
+            const parentUser = await c.env.DB.prepare('SELECT id, uid, owned_group_id, telegram_group_id, telegram_username FROM users WHERE id = ?').bind(parentId).first<any>()
+            
+            if (botToken && parentUser) {
+                // 1. Notify Parent (Level 1)
+                await notifyAction(c.env.DB, 'tpl_invite_l1', parentUser, {
+                    source_uid: `<code>${uid}</code>`
+                });
+
+                // 2. Notify Grandparent (Level 2)
+                const grandParent = await c.env.DB.prepare('SELECT id, owned_group_id, telegram_group_id, telegram_username, uid FROM users WHERE id = (SELECT parent_id FROM users WHERE id = ?)').bind(parentId).first<any>()
+                
+                if (grandParent) {
+                    await notifyAction(c.env.DB, 'tpl_invite_l2', grandParent, {
+                        source_uid: `<code>${uid}</code>`
+                    });
+                }
+            }
+        }
+
+    const token = await sign({
+      id: result.meta.last_row_id, // Use the new ID
+      uid: uid,
+      invite_code: newInviteCode,
+      email: email,
+      name: name || email.split('@')[0],
+      role: 'agent', // Default role
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365 * 10 // 10 Years expiration (Never expire practically)
+    }, c.env.JWT_SECRET, 'HS256')
+
+    return c.json({ 
+        success: true, 
+        message: 'Registrado com sucesso',
+        token,
+        user: {
+            id: result.meta.last_row_id,
+            uid,
+            invite_code: newInviteCode,
+            email,
+            name: name || email.split('@')[0],
+            role: 'agent',
+            balance: 0,
+            commission_balance: 0,
+            commission_rate: commissionRate
+        }
+    })
   } catch (e) {
     console.error(e)
     return c.json({ error: 'Erro ao criar conta' }, 500)
@@ -112,6 +171,12 @@ auth.post('/login', async (c) => {
 
   const valid = await compare(password, user.password)
   if (!valid) return c.json({ error: 'Senha incorreta' }, 400)
+
+  // Update Last Login IP
+  try {
+      const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'Unknown IP'
+      await c.env.DB.prepare('UPDATE users SET last_login_ip = ? WHERE id = ?').bind(ip, user.id).run()
+  } catch(e) {}
 
   const token = await sign({
     id: user.id,
@@ -142,11 +207,19 @@ auth.post('/login', async (c) => {
 // Send Verification Email (Real Implementation)
 auth.post('/send-code', async (c) => {
     const { email, type } = await c.req.json()
-    const apiKey = await getConfig(c.env.DB, 'resend_api_key')
+    // const apiKey = await getConfig(c.env.DB, 'resend_api_key')
+    const apiKey = ''; // Disable email for now to avoid errors, or use mock
     
+    // Always use Dev/Mock Mode for now to avoid crashes
     if (!apiKey) {
         // If no key, return success but log warning (Dev mode)
         console.warn('Resend API Key missing. Use 889988.')
+        
+        // Mock DB store for dev code
+        const code = '889988';
+        const expiresAt = Date.now() + 15 * 60 * 1000 // 15 mins
+        await c.env.DB.prepare(`INSERT OR REPLACE INTO verification_codes (email, code, expires_at) VALUES (?, ?, ?)`).bind(email, code, expiresAt).run()
+        
         return c.json({ success: true, dev: true })
     }
 

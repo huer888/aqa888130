@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Stake Parceiros - Sistema de Gestão</title>
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0f212e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Stake BR" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2300E701'/><text x='50' y='70' font-family='Arial, sans-serif' font-weight='bold' font-size='60' fill='black' text-anchor='middle'>S</text></svg>">
     <style>
       #error-display { display: none; padding: 20px; background: #fee; border: 1px solid red; color: red; font-family: monospace; position: absolute; top: 0; left: 0; right: 0; z-index: 9999; }
@@ -12,6 +18,14 @@
   <body class="bg-gray-100 text-slate-900">
     <div id="error-display"></div>
     <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registered:', reg);
+          }).catch(err => console.log('SW failed:', err));
+        });
+      }
+      
       window.addEventListener('error', function(e) {
         var display = document.getElementById('error-display');
         display.style.display = 'block';

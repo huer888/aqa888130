@@ -1,5 +1,5 @@
-import { Outlet, Link, useLocation } from 'react-router-dom'
-import { Trophy, Wallet, Users, User, FileText, Bell, ChevronDown } from 'lucide-react'
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { Trophy, Wallet, Users, User, FileText, Bell, ChevronDown, RefreshCcw } from 'lucide-react'
 import clsx from 'clsx'
 import Logo from './Logo'
 import { useState, useEffect } from 'react'
@@ -9,9 +9,41 @@ import { useUser } from '../context/UserContext'
 
 export default function Layout() {
   const location = useLocation()
-  const { user, notifications } = useUser()
+  const navigate = useNavigate()
+  const { user, notifications, refreshUser } = useUser()
   const [showNotif, setShowNotif] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [directBalance, setDirectBalance] = useState<number | null>(null)
+
+  // Direct fetch to bypass potential context sync issues
+  useEffect(() => {
+      if(user) {
+          api.get('/wallet/info').then(res => {
+              if(res.data) setDirectBalance(Number(res.data.balance || 0))
+          }).catch(() => {})
+      }
+  }, [location.pathname, user]) // Re-fetch on navigation or user change
+
+  const handleRefreshBalance = async () => {
+      setIsRefreshing(true)
+      await refreshUser()
+      // Also refresh direct balance
+      api.get('/wallet/info').then(res => {
+          if(res.data) setDirectBalance(Number(res.data.balance || 0))
+      }).catch(() => {})
+      setTimeout(() => setIsRefreshing(false), 500)
+  }
+
+  const checkAuth = (e?: any, path?: string) => {
+      if (!localStorage.getItem('token')) {
+          e?.preventDefault()
+          navigate('/register')
+          return false
+      }
+      if (path) navigate(path)
+      return true
+  }
 
   useEffect(() => {
       if(notifications) {
@@ -38,18 +70,20 @@ export default function Layout() {
       <header className="bg-[#1a2c38] px-4 py-3 sticky top-0 z-20 flex items-center justify-between border-b border-[#213743]">
         <div className="flex items-center gap-3">
            <Logo size="sm" />
-           <div className="flex items-center gap-2 bg-[#0f212e] rounded px-3 py-1.5 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors">
-               <span className="text-xs font-bold text-white tracking-wide">{Number(user?.balance || 0).toFixed(2)} <span className="text-primary">R$</span></span>
-               <ChevronDown size={12} className="text-textMuted" />
-           </div>
+           {user && (
+               <div className="flex items-center gap-2 bg-black/30 rounded-lg px-2 py-1 border border-white/5" onClick={handleRefreshBalance}>
+                   <span className="text-[#00E701] font-bold font-mono text-xs">R$ {Number(directBalance ?? user.balance).toFixed(2)}</span>
+                   <RefreshCcw size={10} className={clsx("text-textMuted", isRefreshing && "animate-spin")} />
+               </div>
+           )}
         </div>
         
         <div className="flex items-center gap-3">
-           <Link to="/wallet" className="bg-[#1475e1] hover:bg-[#1475e1]/90 text-white px-4 py-1.5 rounded font-bold text-xs shadow-lg shadow-blue-900/20 transition-colors">
+           <button onClick={(e) => checkAuth(e, '/wallet')} className="bg-[#1475e1] hover:bg-[#1475e1]/90 text-white px-4 py-1.5 rounded font-bold text-xs shadow-lg shadow-blue-900/20 transition-colors">
               Carteira
-           </Link>
+           </button>
            
-           <button onClick={handleOpenNotif} className="relative text-textMuted hover:text-white transition-colors p-1">
+           <button onClick={(e) => checkAuth(e) && handleOpenNotif()} className="relative text-textMuted hover:text-white transition-colors p-1">
               <Bell size={20} />
               {unreadCount > 0 && (
                   <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#1a2c38]"></span>
@@ -66,9 +100,12 @@ export default function Layout() {
       <nav className="fixed bottom-0 max-w-md w-full bg-surface border-t border-gray-800 z-40 pb-safe">
            <div className="flex justify-between px-2">
              {navs.map((item) => (
-               <Link 
+               <button 
                  key={item.path} 
-                 to={item.path}
+                 onClick={(e) => {
+                     if (item.path === '/') navigate('/')
+                     else checkAuth(e, item.path)
+                 }}
                  className={clsx(
                    "flex flex-col items-center py-3 px-2 flex-1 transition-colors relative",
                    location.pathname === item.path ? "text-white" : "text-[#b1bad3] hover:text-white"
@@ -79,7 +116,7 @@ export default function Layout() {
                  )}
                  <item.icon size={20} strokeWidth={2.5} />
                  <span className="text-[10px] mt-1.5 font-bold tracking-wide">{item.name}</span>
-               </Link>
+               </button>
              ))}
            </div>
       </nav>

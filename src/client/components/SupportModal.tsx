@@ -50,14 +50,10 @@ export default function SupportModal({ isOpen, onClose, config, uid }: SupportMo
                </div>
            </div>
 
-           <div className="grid grid-cols-2 gap-4">
-               <button onClick={() => openLink('tg')} className="bg-[#0088cc] hover:bg-[#0088cc]/90 text-white p-4 rounded-xl flex flex-col items-center gap-2 transition">
-                   <Send size={32} />
-                   <span className="font-bold">Telegram</span>
-               </button>
-               <button onClick={() => openLink('ws')} className="bg-[#25D366] hover:bg-[#25D366]/90 text-white p-4 rounded-xl flex flex-col items-center gap-2 transition">
-                   <MessageSquare size={32} />
-                   <span className="font-bold">WhatsApp</span>
+           <div>
+               <button onClick={() => openLink('tg')} className="w-full bg-[#0088cc] hover:bg-[#0088cc]/90 text-white p-6 rounded-xl flex flex-row items-center justify-center gap-4 transition shadow-lg shadow-blue-500/20 group">
+                   <Send size={32} className="group-hover:scale-110 transition-transform" />
+                   <span className="font-bold text-xl">Atendimento via Telegram</span>
                </button>
            </div>
         </Dialog.Panel>

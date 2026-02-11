@@ -18,7 +18,15 @@ for (const file of files) {
     if (file.endsWith('.sql')) {
         const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8')
         console.log(`- ${file}`)
-        db.exec(sql)
+        try {
+            db.exec(sql)
+        } catch (e: any) {
+            if (e.message && (e.message.includes('duplicate column') || e.message.includes('already exists'))) {
+                console.log(`  Skipping ${file} (already applied)`)
+            } else {
+                throw e
+            }
+        }
     }
 }
 console.log('Done.')
